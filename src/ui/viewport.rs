@@ -375,10 +375,12 @@ fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn draw_3d_grid(painter: &Painter, proj: &Projection3D) {
-    // Make the grid effectively infinite: compute how far we need to extend
-    // grid lines so they always cover the visible viewport, regardless of zoom
-    // or pan. We use a generous factor based on viewport diagonal / zoom.
-    let range = ((3000.0 / proj.zoom) as i32).max(50);
+    // Make the grid effectively infinite: extend grid lines far enough to always
+    // cover the visible viewport regardless of zoom or pan.  The constant 3000
+    // was chosen so that the grid edge is off-screen even at the maximum zoom-out
+    // level supported by the camera (zoom ≈ 1..3000).
+    const GRID_COVERAGE_PX: f32 = 3000.0;
+    let range = ((GRID_COVERAGE_PX / proj.zoom) as i32).max(50);
     let grid_col  = Color32::from_rgba_premultiplied(50, 55, 65, 120);
     let major_col = Color32::from_rgba_premultiplied(65, 70, 85, 160);
 
@@ -617,7 +619,7 @@ fn draw_obj_3d(
             ));
             // Render the text string within the projected plane using per-character
             // positioning along the plane's local X axis, so it rotates with the view.
-            draw_text_on_plane(painter, proj, content, pos3, text_w, s, stroke_col);
+            draw_text_on_plane(painter, proj, content, pos3, text_w, stroke_col);
             if selected {
                 painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
             }
@@ -638,7 +640,7 @@ fn draw_obj_3d(
                 Color32::from_rgba_premultiplied(0, 0, 0, 30),
                 Stroke::new(0.5, stroke_col),
             ));
-            draw_text_on_plane(painter, proj, content, pos3, text_w, s, stroke_col);
+            draw_text_on_plane(painter, proj, content, pos3, text_w, stroke_col);
             if selected {
                 painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
             }
@@ -834,13 +836,13 @@ fn draw_obj_3d(
                 ObjType::DecimalNumber { number, num_decimal_places } => {
                     let text = format!("{:.1$}", number, *num_decimal_places as usize);
                     let text_w = 0.3 * s * text.len() as f32;
-                    draw_text_on_plane(painter, proj, &text, pos3, text_w, s, stroke_col);
+                    draw_text_on_plane(painter, proj, &text, pos3, text_w, stroke_col);
                     if selected { painter.circle_stroke(center, text_w * z / 2.0 + 3.0, sel_s); }
                 }
                 ObjType::Integer { number } => {
                     let text = format!("{}", number);
                     let text_w = 0.3 * s * text.len() as f32;
-                    draw_text_on_plane(painter, proj, &text, pos3, text_w, s, stroke_col);
+                    draw_text_on_plane(painter, proj, &text, pos3, text_w, stroke_col);
                     if selected { painter.circle_stroke(center, text_w * z / 2.0 + 3.0, sel_s); }
                 }
                 // Generic fallback for anything else
@@ -872,7 +874,6 @@ fn draw_text_on_plane(
     content: &str,
     pos3: [f32; 3],
     text_w: f32,
-    _scale: f32,
     color: Color32,
 ) {
     let n = content.chars().count().max(1);
