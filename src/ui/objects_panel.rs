@@ -81,9 +81,7 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                                 let next_lane = crate::scene::max_lane_for_object(&app.scene.animations, id) + 1;
                                 for anim_type in AnimType::all_variants() {
                                     if ui.button(anim_type.name()).clicked() {
-                                        let mut entry = AnimEntry::new(id, anim_type, t);
-                                        entry.lane = next_lane;
-                                        app.scene.animations.push(entry);
+                                        app.scene.animations.push(AnimEntry::new_on_lane(id, anim_type, t, next_lane));
                                         ui.close_menu();
                                     }
                                 }

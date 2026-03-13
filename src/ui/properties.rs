@@ -909,7 +909,10 @@ fn show_anim_props(app: &mut ManimStudio, ui: &mut egui::Ui, id: &str) {
 
     // Lane selector
     {
-        let current_lane = app.scene.animations.iter().find(|a| a.id == *id).unwrap().lane;
+        let current_lane = match app.scene.animations.iter().find(|a| a.id == *id) {
+            Some(a) => a.lane,
+            None => return,
+        };
         let mut new_lane = current_lane as i32;
         ui.horizontal(|ui| {
             ui.label("Lane:");
@@ -927,7 +930,10 @@ fn show_anim_props(app: &mut ManimStudio, ui: &mut egui::Ui, id: &str) {
     }
 
     // Type-specific parameters
-    let anim_type = app.scene.animations.iter().find(|a| a.id == *id).unwrap().anim_type.clone();
+    let anim_type = match app.scene.animations.iter().find(|a| a.id == *id) {
+        Some(a) => a.anim_type.clone(),
+        None => return,
+    };
     match anim_type {
         AnimType::Rotate { angle } => {
             let mut a = angle;

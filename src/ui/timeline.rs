@@ -107,7 +107,7 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                     painter.text(
                         Pos2::new(avail.min.x + 8.0, y + TRACK_H / 2.0),
                         egui::Align2::LEFT_CENTER,
-                        label_text,
+                        &label_text,
                         egui::FontId::proportional(12.0),
                         if sel_obj.as_deref() == Some(&entry.obj_id) {
                             Color32::from_rgb(255, 220, 80)
@@ -115,6 +115,24 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                             Color32::from_rgb(190, 190, 200)
                         },
                     );
+                    // "+" button to add a new lane
+                    let btn_rect = Rect::from_center_size(
+                        Pos2::new(avail.min.x + HEADER_W - 14.0, y + TRACK_H / 2.0),
+                        Vec2::splat(16.0),
+                    );
+                    let btn_hovered = mouse_pos.map_or(false, |mp| btn_rect.contains(mp));
+                    painter.rect_filled(btn_rect, 3.0,
+                        if btn_hovered { Color32::from_rgb(60, 60, 80) } else { Color32::from_rgb(40, 40, 55) });
+                    painter.text(btn_rect.center(), egui::Align2::CENTER_CENTER, "+",
+                        egui::FontId::proportional(12.0), Color32::from_rgb(160, 160, 200));
+                    if clicked && btn_hovered {
+                        // Add a default Create animation to a new lane
+                        let next_lane = entry.num_lanes;
+                        let t = app.scene.timeline.current_time;
+                        let new_anim = crate::scene::AnimEntry::new_on_lane(&entry.obj_id, crate::scene::AnimType::Create, t, next_lane);
+                        app.scene.animations.push(new_anim);
+                        click_on_block = true; // prevent seek
+                    }
                 } else {
                     painter.text(
                         Pos2::new(avail.min.x + 8.0 + LANE_HEADER_INDENT, y + TRACK_H / 2.0),
