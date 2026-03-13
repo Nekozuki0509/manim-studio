@@ -171,6 +171,66 @@ fn build_object_code(obj: &ManimObject, require_latex: bool) -> String {
                 pts.join(", "), color, obj.fill_opacity
             )
         }
+        ObjType::Arc { radius, start_angle, angle } =>
+            format!("Arc(radius={}, start_angle={}*DEGREES, angle={}*DEGREES, color={})", radius, start_angle, angle, color),
+        ObjType::ArcBetweenPoints { start, end, angle } =>
+            format!("ArcBetweenPoints(start=np.array([{:.2}, {:.2}, {:.2}]), end=np.array([{:.2}, {:.2}, {:.2}]), angle={}*DEGREES, color={})",
+                start[0], start[1], start[2], end[0], end[1], end[2], angle, color),
+        ObjType::Ellipse { width, height } =>
+            format!("Ellipse(width={}, height={}, color={}, fill_opacity={:.2})", width, height, color, obj.fill_opacity),
+        ObjType::Annulus { inner_radius, outer_radius } =>
+            format!("Annulus(inner_radius={}, outer_radius={}, color={}, fill_opacity={:.2})", inner_radius, outer_radius, color, obj.fill_opacity),
+        ObjType::Sector { radius, start_angle, angle } =>
+            format!("Sector(outer_radius={}, start_angle={}*DEGREES, angle={}*DEGREES, color={}, fill_opacity={:.2})", radius, start_angle, angle, color, obj.fill_opacity),
+        ObjType::RegularPolygon { n, radius } =>
+            format!("RegularPolygon(n={}, color={}, fill_opacity={:.2}).scale({:.3})", n, color, obj.fill_opacity, radius),
+        ObjType::Star { n, outer_radius, inner_radius } =>
+            format!("Star(n={}, outer_radius={}, inner_radius={}, color={}, fill_opacity={:.2})", n, outer_radius, inner_radius, color, obj.fill_opacity),
+        ObjType::RoundedRectangle { width, height, corner_radius } =>
+            format!("RoundedRectangle(width={}, height={}, corner_radius={}, color={}, fill_opacity={:.2})", width, height, corner_radius, color, obj.fill_opacity),
+        ObjType::DashedLine { start, end, dash_length } =>
+            format!("DashedLine(start=np.array([{:.2}, {:.2}, {:.2}]), end=np.array([{:.2}, {:.2}, {:.2}]), dash_length={}, color={})",
+                start[0], start[1], start[2], end[0], end[1], end[2], dash_length, color),
+        ObjType::DoubleArrow { start, end } =>
+            format!("DoubleArrow(start=np.array([{:.2}, {:.2}, {:.2}]), end=np.array([{:.2}, {:.2}, {:.2}]), color={})",
+                start[0], start[1], start[2], end[0], end[1], end[2], color),
+        ObjType::Vector { direction } =>
+            format!("Vector(direction=np.array([{:.2}, {:.2}, {:.2}]), color={})", direction[0], direction[1], direction[2], color),
+        ObjType::Brace { direction, length } =>
+            format!("BraceLabel(Dot(), text=\"\", brace_direction=np.array([{:.2}, {:.2}, {:.2}]), color={}).scale({:.3})", direction[0], direction[1], direction[2], color, length),
+        ObjType::BraceBetweenPoints { start, end } =>
+            format!("BraceBetweenPoints(np.array([{:.2}, {:.2}, {:.2}]), np.array([{:.2}, {:.2}, {:.2}]), color={})",
+                start[0], start[1], start[2], end[0], end[1], end[2], color),
+        ObjType::Angle { radius, start_angle, angle } =>
+            format!("Angle(radius={}, start_angle={}*DEGREES, angle={}*DEGREES, color={})", radius, start_angle, angle, color),
+        ObjType::RightAngle { size } =>
+            format!("RightAngle(length={}, color={})", size, color),
+        ObjType::NumberLine { x_min, x_max, step } =>
+            format!("NumberLine(x_range=[{}, {}, {}], color={})", x_min, x_max, step, color),
+        ObjType::BarChart { values, bar_width } => {
+            let vals: Vec<String> = values.iter().map(|v| format!("{:.2}", v)).collect();
+            format!("BarChart(values=[{}], bar_width={}, bar_colors=[{}])", vals.join(", "), bar_width, color)
+        }
+        ObjType::DecimalNumber { number, num_decimal_places } =>
+            format!("DecimalNumber({}, num_decimal_places={}, color={})", number, num_decimal_places, color),
+        ObjType::Integer { number } =>
+            format!("Integer({}, color={})", number, color),
+        ObjType::Dot3D =>
+            format!("Dot3D(color={})", color),
+        ObjType::Cone { radius, height } =>
+            format!("Cone(base_radius={}, height={}, fill_color={}, fill_opacity={:.2})", radius, height, color, obj.fill_opacity),
+        ObjType::Torus { major_radius, minor_radius } =>
+            format!("Torus(major_radius={}, minor_radius={}, fill_color={}, fill_opacity={:.2})", major_radius, minor_radius, color, obj.fill_opacity),
+        ObjType::Prism { width, height, depth } =>
+            format!("Prism(dimensions=[{}, {}, {}], fill_color={}, fill_opacity={:.2})", width, height, depth, color, obj.fill_opacity),
+        ObjType::Arrow3D { start, end } =>
+            format!("Arrow3D(start=np.array([{:.2}, {:.2}, {:.2}]), end=np.array([{:.2}, {:.2}, {:.2}]), color={})",
+                start[0], start[1], start[2], end[0], end[1], end[2], color),
+        ObjType::Line3D { start, end } =>
+            format!("Line3D(start=np.array([{:.2}, {:.2}, {:.2}]), end=np.array([{:.2}, {:.2}, {:.2}]), color={})",
+                start[0], start[1], start[2], end[0], end[1], end[2], color),
+        ObjType::Surface =>
+            format!("Surface(lambda u, v: np.array([u, v, 0]), u_range=[-2, 2], v_range=[-2, 2], fill_color={}, fill_opacity={:.2})", color, obj.fill_opacity),
     };
 
     let mut code = format!("        {} = {}", var, constructor);
@@ -226,6 +286,51 @@ fn build_anim_arg(anim: &AnimEntry, scene: &Scene) -> String {
         AnimType::Indicate => format!("Indicate({})", var),
         AnimType::Wiggle => format!("Wiggle({})", var),
         AnimType::Wait => "Wait()  # should use self.wait() instead".into(),
+        AnimType::Unwrite => format!("Unwrite({})", var),
+        AnimType::FadeTransform { target_id } => {
+            let tgt = scene.get_object(target_id)
+                .map(|o| o.var_name())
+                .unwrap_or_else(|| "target".into());
+            format!("FadeTransform({}, {})", var, tgt)
+        }
+        AnimType::ReplacementTransform { target_id } => {
+            let tgt = scene.get_object(target_id)
+                .map(|o| o.var_name())
+                .unwrap_or_else(|| "target".into());
+            format!("ReplacementTransform({}, {})", var, tgt)
+        }
+        AnimType::ShrinkToCenter => format!("ShrinkToCenter({})", var),
+        AnimType::GrowFromPoint { point } =>
+            format!("GrowFromPoint({}, point=np.array([{:.2}, {:.2}, {:.2}]))", var, point[0], point[1], point[2]),
+        AnimType::GrowFromEdge { edge } =>
+            format!("GrowFromEdge({}, edge=np.array([{:.2}, {:.2}, {:.2}]))", var, edge[0], edge[1], edge[2]),
+        AnimType::GrowArrow => format!("GrowArrow({})", var),
+        AnimType::CounterclockwiseTransform { target_id } => {
+            let tgt = scene.get_object(target_id)
+                .map(|o| o.var_name())
+                .unwrap_or_else(|| "target".into());
+            format!("CounterclockwiseTransform({}, {})", var, tgt)
+        }
+        AnimType::ClockwiseTransform { target_id } => {
+            let tgt = scene.get_object(target_id)
+                .map(|o| o.var_name())
+                .unwrap_or_else(|| "target".into());
+            format!("ClockwiseTransform({}, {})", var, tgt)
+        }
+        AnimType::ApplyWave => format!("ApplyWave({})", var),
+        AnimType::Circumscribe => format!("Circumscribe({})", var),
+        AnimType::ShowPassingFlash => format!("ShowPassingFlash({})", var),
+        AnimType::SpiralIn => format!("SpiralIn({})", var),
+        AnimType::MoveAlongPath { path_points } => {
+            let pts: Vec<String> = path_points.iter().map(|p| format!("[{:.2}, {:.2}, 0]", p[0], p[1])).collect();
+            format!("MoveAlongPath({}, VMobject().set_points_as_corners([{}]))", var, pts.join(", "))
+        }
+        AnimType::Homotopy => format!("Homotopy(lambda x, y, z, t: (x, y, z), {})", var),
+        AnimType::PhaseFlow => format!("PhaseFlow(lambda p: p, {})", var),
+        AnimType::Succession { animations } =>
+            format!("Succession({})", animations.join(", ")),
+        AnimType::AnimationGroup { animations } =>
+            format!("AnimationGroup({})", animations.join(", ")),
     }
 }
 

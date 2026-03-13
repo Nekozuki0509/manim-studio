@@ -816,6 +816,15 @@ fn draw_obj_2d(
                 }
             }
         }
+        // Fallback for new types: draw a labeled placeholder circle
+        _ => {
+            let r = 20.0 * s * z / 60.0;
+            let r = r.max(8.0);
+            painter.circle(pos, r, fill, stroke);
+            painter.text(pos, egui::Align2::CENTER_CENTER, obj.object_type.icon(),
+                egui::FontId::proportional(r * 0.8), stroke_col);
+            if selected { painter.circle_stroke(pos, r + 3.0, sel); }
+        }
     }
 
     if selected {

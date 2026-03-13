@@ -159,7 +159,9 @@ pub fn compute_display_state(obj: &ManimObject, animations: &[AnimEntry], t: f32
         matches!(a.anim_type,
             AnimType::Create | AnimType::FadeIn | AnimType::Write |
             AnimType::GrowFromCenter | AnimType::DrawBorderThenFill |
-            AnimType::SpinInFromNothing)
+            AnimType::SpinInFromNothing | AnimType::GrowFromPoint { .. } |
+            AnimType::GrowFromEdge { .. } | AnimType::GrowArrow |
+            AnimType::SpiralIn)
     });
 
     // If there's no creation anim, object is always visible.
@@ -210,7 +212,7 @@ pub fn compute_display_state(obj: &ManimObject, animations: &[AnimEntry], t: f32
             }
 
             // ── Disappearance ───────────────────────────────────────────────
-            AnimType::FadeOut | AnimType::Uncreate => {
+            AnimType::FadeOut | AnimType::Uncreate | AnimType::Unwrite => {
                 state.opacity = (1.0 - p) * obj.opacity;
                 state.fill_opacity = (1.0 - p) * obj.fill_opacity;
                 if done {
@@ -254,12 +256,41 @@ pub fn compute_display_state(obj: &ManimObject, animations: &[AnimEntry], t: f32
             }
 
             // ── Highlights (no persistent visual change) ──────────────────
-            AnimType::Flash | AnimType::Indicate | AnimType::Wiggle => {
+            AnimType::Flash | AnimType::Indicate | AnimType::Wiggle
+            | AnimType::ApplyWave | AnimType::Circumscribe
+            | AnimType::ShowPassingFlash => {
                 // pulse scale during the animation
                 if !done {
                     let pulse = 1.0 + 0.15 * (p * std::f32::consts::PI).sin();
                     state.scale *= pulse;
                 }
+            }
+
+            AnimType::ShrinkToCenter => {
+                state.scale = obj.scale * (1.0 - p);
+                state.opacity = (1.0 - p) * obj.opacity;
+                state.fill_opacity = (1.0 - p) * obj.fill_opacity;
+                if done {
+                    state.visible = false;
+                    state.opacity = 0.0;
+                }
+            }
+            AnimType::GrowFromPoint { .. } | AnimType::GrowFromEdge { .. } | AnimType::GrowArrow => {
+                state.visible = true;
+                state.scale = obj.scale * p;
+                state.opacity = obj.opacity;
+                state.fill_opacity = obj.fill_opacity;
+            }
+            AnimType::SpiralIn => {
+                state.visible = true;
+                state.scale = obj.scale * p;
+                state.opacity = p * obj.opacity;
+                state.fill_opacity = p * obj.fill_opacity;
+            }
+
+            AnimType::Transform { .. } | AnimType::FadeTransform { .. } | AnimType::ReplacementTransform { .. }
+            | AnimType::CounterclockwiseTransform { .. } | AnimType::ClockwiseTransform { .. } => {
+                // These are handled as no-ops for preview (actual transform is complex)
             }
 
             _ => {}
@@ -343,6 +374,15 @@ fn default_color(t: &ObjType) -> [f32; 3] {
         ObjType::Cube { .. } => [0.85, 0.45, 0.85],
         ObjType::Cylinder { .. } => [0.45, 0.85, 0.85],
         ObjType::NumberPlane => [0.30, 0.40, 0.90],
+        ObjType::Ellipse { .. } => [0.40, 0.75, 0.95],
+        ObjType::Annulus { .. } => [0.80, 0.50, 0.30],
+        ObjType::RegularPolygon { .. } => [0.70, 0.90, 0.30],
+        ObjType::Star { .. } => [0.95, 0.85, 0.20],
+        ObjType::RoundedRectangle { .. } => [0.30, 0.85, 0.40],
+        ObjType::Cone { .. } => [0.90, 0.65, 0.30],
+        ObjType::Torus { .. } => [0.65, 0.40, 0.90],
+        ObjType::Prism { .. } => [0.80, 0.50, 0.70],
+        ObjType::BarChart { .. } => [0.30, 0.70, 0.90],
         _ => [1.0, 1.0, 1.0],
     }
 }
@@ -368,6 +408,38 @@ pub enum ObjType {
     Axes,
     NumberPlane,
     Polygon { points: Vec<[f32; 2]> },
+    // 2D geometry
+    Arc { radius: f32, start_angle: f32, angle: f32 },
+    ArcBetweenPoints { start: [f32; 3], end: [f32; 3], angle: f32 },
+    Ellipse { width: f32, height: f32 },
+    Annulus { inner_radius: f32, outer_radius: f32 },
+    Sector { radius: f32, start_angle: f32, angle: f32 },
+    RegularPolygon { n: u32, radius: f32 },
+    Star { n: u32, outer_radius: f32, inner_radius: f32 },
+    RoundedRectangle { width: f32, height: f32, corner_radius: f32 },
+    // Lines & arrows
+    DashedLine { start: [f32; 3], end: [f32; 3], dash_length: f32 },
+    DoubleArrow { start: [f32; 3], end: [f32; 3] },
+    Vector { direction: [f32; 3] },
+    // Annotations
+    Brace { direction: [f32; 3], length: f32 },
+    BraceBetweenPoints { start: [f32; 3], end: [f32; 3] },
+    Angle { radius: f32, start_angle: f32, angle: f32 },
+    RightAngle { size: f32 },
+    // Graphing
+    NumberLine { x_min: f32, x_max: f32, step: f32 },
+    BarChart { values: Vec<f32>, bar_width: f32 },
+    // Numbers
+    DecimalNumber { number: f32, num_decimal_places: u32 },
+    Integer { number: i32 },
+    // 3D objects
+    Dot3D,
+    Cone { radius: f32, height: f32 },
+    Torus { major_radius: f32, minor_radius: f32 },
+    Prism { width: f32, height: f32, depth: f32 },
+    Arrow3D { start: [f32; 3], end: [f32; 3] },
+    Line3D { start: [f32; 3], end: [f32; 3] },
+    Surface,
 }
 
 impl ObjType {
@@ -388,6 +460,32 @@ impl ObjType {
             Self::Axes => "Axes",
             Self::NumberPlane => "NumberPlane",
             Self::Polygon { .. } => "Polygon",
+            Self::Arc { .. } => "Arc",
+            Self::ArcBetweenPoints { .. } => "ArcBetweenPoints",
+            Self::Ellipse { .. } => "Ellipse",
+            Self::Annulus { .. } => "Annulus",
+            Self::Sector { .. } => "Sector",
+            Self::RegularPolygon { .. } => "RegularPolygon",
+            Self::Star { .. } => "Star",
+            Self::RoundedRectangle { .. } => "RoundedRectangle",
+            Self::DashedLine { .. } => "DashedLine",
+            Self::DoubleArrow { .. } => "DoubleArrow",
+            Self::Vector { .. } => "Vector",
+            Self::Brace { .. } => "Brace",
+            Self::BraceBetweenPoints { .. } => "BraceBetweenPoints",
+            Self::Angle { .. } => "Angle",
+            Self::RightAngle { .. } => "RightAngle",
+            Self::NumberLine { .. } => "NumberLine",
+            Self::BarChart { .. } => "BarChart",
+            Self::DecimalNumber { .. } => "DecimalNumber",
+            Self::Integer { .. } => "Integer",
+            Self::Dot3D => "Dot3D",
+            Self::Cone { .. } => "Cone",
+            Self::Torus { .. } => "Torus",
+            Self::Prism { .. } => "Prism",
+            Self::Arrow3D { .. } => "Arrow3D",
+            Self::Line3D { .. } => "Line3D",
+            Self::Surface => "Surface",
         }
     }
 
@@ -408,6 +506,32 @@ impl ObjType {
             Self::Axes => "⊞",
             Self::NumberPlane => "⊟",
             Self::Polygon { .. } => "⬡",
+            Self::Arc { .. } => "⌒",
+            Self::ArcBetweenPoints { .. } => "⌒",
+            Self::Ellipse { .. } => "⬮",
+            Self::Annulus { .. } => "◎",
+            Self::Sector { .. } => "◔",
+            Self::RegularPolygon { .. } => "⬡",
+            Self::Star { .. } => "★",
+            Self::RoundedRectangle { .. } => "▢",
+            Self::DashedLine { .. } => "┄",
+            Self::DoubleArrow { .. } => "↔",
+            Self::Vector { .. } => "⇀",
+            Self::Brace { .. } => "⏞",
+            Self::BraceBetweenPoints { .. } => "⏞",
+            Self::Angle { .. } => "∠",
+            Self::RightAngle { .. } => "∟",
+            Self::NumberLine { .. } => "├",
+            Self::BarChart { .. } => "📊",
+            Self::DecimalNumber { .. } => "🔢",
+            Self::Integer { .. } => "🔢",
+            Self::Dot3D => "•",
+            Self::Cone { .. } => "▲",
+            Self::Torus { .. } => "◍",
+            Self::Prism { .. } => "▱",
+            Self::Arrow3D { .. } => "➜",
+            Self::Line3D { .. } => "╱",
+            Self::Surface => "🌊",
         }
     }
 }
@@ -429,6 +553,36 @@ pub fn object_templates() -> Vec<(&'static str, &'static str, ObjType)> {
         ("⊡", "Cylinder",    ObjType::Cylinder { radius: 1.0, height: 2.0 }),
         ("⊞", "Axes",        ObjType::Axes),
         ("⊟", "NumberPlane", ObjType::NumberPlane),
+        // More 2D Shapes
+        ("⬮", "Ellipse",    ObjType::Ellipse { width: 3.0, height: 2.0 }),
+        ("◎", "Annulus",     ObjType::Annulus { inner_radius: 0.5, outer_radius: 1.0 }),
+        ("◔", "Sector",     ObjType::Sector { radius: 1.0, start_angle: 0.0, angle: 90.0 }),
+        ("⌒", "Arc",        ObjType::Arc { radius: 1.0, start_angle: 0.0, angle: 180.0 }),
+        ("⬡", "RegularPolygon", ObjType::RegularPolygon { n: 6, radius: 1.0 }),
+        ("★", "Star",       ObjType::Star { n: 5, outer_radius: 1.0, inner_radius: 0.5 }),
+        ("▢", "RoundedRectangle", ObjType::RoundedRectangle { width: 3.0, height: 2.0, corner_radius: 0.3 }),
+        // Lines & Arrows
+        ("┄", "DashedLine", ObjType::DashedLine { start: [-2.0, 0.0, 0.0], end: [2.0, 0.0, 0.0], dash_length: 0.2 }),
+        ("↔", "DoubleArrow", ObjType::DoubleArrow { start: [-2.0, 0.0, 0.0], end: [2.0, 0.0, 0.0] }),
+        ("⇀", "Vector",     ObjType::Vector { direction: [2.0, 1.0, 0.0] }),
+        // Annotations
+        ("⏞", "Brace",      ObjType::Brace { direction: [0.0, 1.0, 0.0], length: 2.0 }),
+        ("∠", "Angle",      ObjType::Angle { radius: 0.5, start_angle: 0.0, angle: 45.0 }),
+        ("∟", "RightAngle", ObjType::RightAngle { size: 0.5 }),
+        // Graphing
+        ("├", "NumberLine",  ObjType::NumberLine { x_min: -5.0, x_max: 5.0, step: 1.0 }),
+        ("📊", "BarChart",   ObjType::BarChart { values: vec![3.0, 5.0, 2.0, 4.0, 1.0], bar_width: 0.6 }),
+        // Numbers
+        ("🔢", "DecimalNumber", ObjType::DecimalNumber { number: 3.14, num_decimal_places: 2 }),
+        ("🔢", "Integer",    ObjType::Integer { number: 42 }),
+        // 3D
+        ("•", "Dot3D",      ObjType::Dot3D),
+        ("▲", "Cone",       ObjType::Cone { radius: 1.0, height: 2.0 }),
+        ("◍", "Torus",      ObjType::Torus { major_radius: 1.0, minor_radius: 0.3 }),
+        ("▱", "Prism",      ObjType::Prism { width: 2.0, height: 2.0, depth: 2.0 }),
+        ("➜", "Arrow3D",    ObjType::Arrow3D { start: [0.0, 0.0, 0.0], end: [2.0, 1.0, 1.0] }),
+        ("╱", "Line3D",     ObjType::Line3D { start: [-1.0, -1.0, -1.0], end: [1.0, 1.0, 1.0] }),
+        ("🌊", "Surface",    ObjType::Surface),
     ]
 }
 
@@ -483,6 +637,24 @@ pub enum AnimType {
     Indicate,
     Wiggle,
     Wait,
+    Unwrite,
+    FadeTransform { target_id: String },
+    ReplacementTransform { target_id: String },
+    ShrinkToCenter,
+    GrowFromPoint { point: [f32; 3] },
+    GrowFromEdge { edge: [f32; 3] },
+    GrowArrow,
+    CounterclockwiseTransform { target_id: String },
+    ClockwiseTransform { target_id: String },
+    ApplyWave,
+    Circumscribe,
+    ShowPassingFlash,
+    SpiralIn,
+    MoveAlongPath { path_points: Vec<[f32; 2]> },
+    Homotopy,
+    PhaseFlow,
+    Succession { animations: Vec<String> },
+    AnimationGroup { animations: Vec<String> },
 }
 
 impl AnimType {
@@ -505,6 +677,24 @@ impl AnimType {
             Self::Indicate => "Indicate",
             Self::Wiggle => "Wiggle",
             Self::Wait => "Wait",
+            Self::Unwrite => "Unwrite",
+            Self::FadeTransform { .. } => "FadeTransform",
+            Self::ReplacementTransform { .. } => "ReplacementTransform",
+            Self::ShrinkToCenter => "ShrinkToCenter",
+            Self::GrowFromPoint { .. } => "GrowFromPoint",
+            Self::GrowFromEdge { .. } => "GrowFromEdge",
+            Self::GrowArrow => "GrowArrow",
+            Self::CounterclockwiseTransform { .. } => "CounterclockwiseTransform",
+            Self::ClockwiseTransform { .. } => "ClockwiseTransform",
+            Self::ApplyWave => "ApplyWave",
+            Self::Circumscribe => "Circumscribe",
+            Self::ShowPassingFlash => "ShowPassingFlash",
+            Self::SpiralIn => "SpiralIn",
+            Self::MoveAlongPath { .. } => "MoveAlongPath",
+            Self::Homotopy => "Homotopy",
+            Self::PhaseFlow => "PhaseFlow",
+            Self::Succession { .. } => "Succession",
+            Self::AnimationGroup { .. } => "AnimationGroup",
         }
     }
 
@@ -514,6 +704,24 @@ impl AnimType {
             Self::FadeIn | Self::FadeOut => 0.5,
             Self::Transform { .. } => 1.5,
             Self::Wait => 1.0,
+            Self::Unwrite => 2.0,
+            Self::FadeTransform { .. } => 1.0,
+            Self::ReplacementTransform { .. } => 1.0,
+            Self::ShrinkToCenter => 1.0,
+            Self::GrowFromPoint { .. } => 1.0,
+            Self::GrowFromEdge { .. } => 1.0,
+            Self::GrowArrow => 1.0,
+            Self::CounterclockwiseTransform { .. } => 1.5,
+            Self::ClockwiseTransform { .. } => 1.5,
+            Self::ApplyWave => 1.0,
+            Self::Circumscribe => 1.0,
+            Self::ShowPassingFlash => 1.0,
+            Self::SpiralIn => 1.0,
+            Self::MoveAlongPath { .. } => 2.0,
+            Self::Homotopy => 1.5,
+            Self::PhaseFlow => 1.5,
+            Self::Succession { .. } => 2.0,
+            Self::AnimationGroup { .. } => 1.5,
             _ => 1.0,
         }
     }
@@ -531,6 +739,15 @@ impl AnimType {
             Self::Transform { .. } => [230, 160, 50],
             Self::Flash | Self::Indicate | Self::Wiggle => [230, 220, 50],
             Self::Wait => [80, 80, 80],
+            Self::Unwrite => [80, 150, 230],
+            Self::FadeTransform { .. } | Self::ReplacementTransform { .. } => [230, 160, 50],
+            Self::ShrinkToCenter => [200, 80, 80],
+            Self::GrowFromPoint { .. } | Self::GrowFromEdge { .. } | Self::GrowArrow => [60, 180, 100],
+            Self::CounterclockwiseTransform { .. } | Self::ClockwiseTransform { .. } => [230, 160, 50],
+            Self::ApplyWave | Self::Circumscribe | Self::ShowPassingFlash => [230, 220, 50],
+            Self::SpiralIn => [60, 180, 100],
+            Self::MoveAlongPath { .. } | Self::Homotopy | Self::PhaseFlow => [180, 100, 230],
+            Self::Succession { .. } | Self::AnimationGroup { .. } => [140, 140, 180],
         }
     }
 
@@ -545,6 +762,18 @@ impl AnimType {
             Self::FadeOut, Self::Uncreate,
             Self::Flash, Self::Indicate, Self::Wiggle,
             Self::Wait,
+            Self::Unwrite,
+            Self::ShrinkToCenter,
+            Self::GrowFromPoint { point: [0.0, 0.0, 0.0] },
+            Self::GrowFromEdge { edge: [0.0, -1.0, 0.0] },
+            Self::GrowArrow,
+            Self::ApplyWave,
+            Self::Circumscribe,
+            Self::ShowPassingFlash,
+            Self::SpiralIn,
+            Self::MoveAlongPath { path_points: vec![] },
+            Self::Homotopy,
+            Self::PhaseFlow,
         ]
     }
 }
@@ -557,6 +786,23 @@ pub enum RateFunc {
     RushFrom,
     ThereAndBack,
     Wiggle,
+    DoubleSmooth,
+    ExponentialDecay,
+    EaseInSine,
+    EaseOutSine,
+    EaseInOutSine,
+    EaseInQuad,
+    EaseOutQuad,
+    EaseInOutQuad,
+    EaseInCubic,
+    EaseOutCubic,
+    EaseInOutCubic,
+    EaseInExpo,
+    EaseOutExpo,
+    EaseInOutExpo,
+    EaseInBounce,
+    EaseOutBounce,
+    EaseInOutBounce,
 }
 
 impl RateFunc {
@@ -568,6 +814,23 @@ impl RateFunc {
             Self::RushFrom => "rush_from",
             Self::ThereAndBack => "there_and_back",
             Self::Wiggle => "wiggle",
+            Self::DoubleSmooth => "double_smooth",
+            Self::ExponentialDecay => "exponential_decay",
+            Self::EaseInSine => "rate_functions.ease_in_sine",
+            Self::EaseOutSine => "rate_functions.ease_out_sine",
+            Self::EaseInOutSine => "rate_functions.ease_in_out_sine",
+            Self::EaseInQuad => "rate_functions.ease_in_quad",
+            Self::EaseOutQuad => "rate_functions.ease_out_quad",
+            Self::EaseInOutQuad => "rate_functions.ease_in_out_quad",
+            Self::EaseInCubic => "rate_functions.ease_in_cubic",
+            Self::EaseOutCubic => "rate_functions.ease_out_cubic",
+            Self::EaseInOutCubic => "rate_functions.ease_in_out_cubic",
+            Self::EaseInExpo => "rate_functions.ease_in_expo",
+            Self::EaseOutExpo => "rate_functions.ease_out_expo",
+            Self::EaseInOutExpo => "rate_functions.ease_in_out_expo",
+            Self::EaseInBounce => "rate_functions.ease_in_bounce",
+            Self::EaseOutBounce => "rate_functions.ease_out_bounce",
+            Self::EaseInOutBounce => "rate_functions.ease_in_out_bounce",
         }
     }
 
@@ -579,11 +842,34 @@ impl RateFunc {
             Self::RushFrom => "Rush From",
             Self::ThereAndBack => "There & Back",
             Self::Wiggle => "Wiggle",
+            Self::DoubleSmooth => "Double Smooth",
+            Self::ExponentialDecay => "Exponential Decay",
+            Self::EaseInSine => "Ease In Sine",
+            Self::EaseOutSine => "Ease Out Sine",
+            Self::EaseInOutSine => "Ease In Out Sine",
+            Self::EaseInQuad => "Ease In Quad",
+            Self::EaseOutQuad => "Ease Out Quad",
+            Self::EaseInOutQuad => "Ease In Out Quad",
+            Self::EaseInCubic => "Ease In Cubic",
+            Self::EaseOutCubic => "Ease Out Cubic",
+            Self::EaseInOutCubic => "Ease In Out Cubic",
+            Self::EaseInExpo => "Ease In Expo",
+            Self::EaseOutExpo => "Ease Out Expo",
+            Self::EaseInOutExpo => "Ease In Out Expo",
+            Self::EaseInBounce => "Ease In Bounce",
+            Self::EaseOutBounce => "Ease Out Bounce",
+            Self::EaseInOutBounce => "Ease In Out Bounce",
         }
     }
 
     pub fn all() -> Vec<Self> {
-        vec![Self::Linear, Self::Smooth, Self::RushInto, Self::RushFrom, Self::ThereAndBack, Self::Wiggle]
+        vec![Self::Linear, Self::Smooth, Self::RushInto, Self::RushFrom, Self::ThereAndBack, Self::Wiggle,
+             Self::DoubleSmooth, Self::ExponentialDecay,
+             Self::EaseInSine, Self::EaseOutSine, Self::EaseInOutSine,
+             Self::EaseInQuad, Self::EaseOutQuad, Self::EaseInOutQuad,
+             Self::EaseInCubic, Self::EaseOutCubic, Self::EaseInOutCubic,
+             Self::EaseInExpo, Self::EaseOutExpo, Self::EaseInOutExpo,
+             Self::EaseInBounce, Self::EaseOutBounce, Self::EaseInOutBounce]
     }
 }
 
