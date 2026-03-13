@@ -10,6 +10,13 @@ const GRID_COLOR: Color32 = Color32::from_rgb(40, 42, 50);
 const GRID_MAJOR: Color32 = Color32::from_rgb(55, 58, 68);
 const AXIS_COLOR: Color32 = Color32::from_rgb(70, 75, 90);
 
+/// Conversion factor between Manim font_size units and rendering scale.
+const FONT_SIZE_SCALE: f32 = 48.0;
+/// cos(30°) = √3/2 ≈ 0.866, used for equilateral triangle geometry.
+const COS_30: f32 = 0.866;
+/// sin(30°) = 0.5, used for equilateral triangle geometry.
+const SIN_30: f32 = 0.5;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +485,11 @@ fn draw_obj_3d(
             if pts.len() >= 3 {
                 painter.add(egui::Shape::convex_polygon(pts.clone(), fill, Stroke::NONE));
             }
-            if selected { painter.circle_stroke(center, radius * s * z + 3.0, sel_s); }
+            if selected {
+                // Use the projected polygon extent for selection highlight
+                let extent = pts.iter().map(|p| (center - *p).length()).fold(0.0_f32, f32::max);
+                painter.circle_stroke(center, extent + 3.0, sel_s);
+            }
         }
         ObjType::Cube { side_length } => {
             let half = side_length * s / 2.0;
@@ -529,8 +540,8 @@ fn draw_obj_3d(
             let r = side_length * s / 2.0;
             let pts: Vec<Pos2> = vec![
                 [0.0, r],
-                [-r * 0.866, -r * 0.5],
-                [r * 0.866, -r * 0.5],
+                [-r * COS_30, -r * SIN_30],
+                [r * COS_30, -r * SIN_30],
             ].iter().map(|[dx, dy]| {
                 proj.project([pos3[0] + dx, pos3[1] + dy, pos3[2]])
             }).collect();
@@ -585,9 +596,9 @@ fn draw_obj_3d(
         // Text / MathTex: render as flat text plane in XY, oriented in 3D space
         ObjType::Text { content, font_size } => {
             // Approximate text extents in Manim units
-            let char_w = font_size * s / 48.0 * 0.5;
+            let char_w = font_size * s / FONT_SIZE_SCALE * 0.5;
             let text_w = char_w * content.len() as f32;
-            let text_h = font_size * s / 48.0 * 0.8;
+            let text_h = font_size * s / FONT_SIZE_SCALE * 0.8;
             let hw = text_w / 2.0;
             let hh = text_h / 2.0;
             // Project four corners of the text plane (lying in XY at the object's Z)
@@ -603,7 +614,7 @@ fn draw_obj_3d(
                 Stroke::new(0.5, stroke_col),
             ));
             // Draw the text at the projected center (readable but bounded by the plane)
-            let fs = (font_size * s * z / 48.0 * 14.0).clamp(8.0, 60.0);
+            let fs = (font_size * s * z / FONT_SIZE_SCALE * 14.0).clamp(8.0, 60.0);
             painter.text(center, egui::Align2::CENTER_CENTER, content,
                 egui::FontId::proportional(fs), stroke_col);
             if selected {
@@ -700,14 +711,14 @@ fn draw_obj_2d(
             let r = side_length * s * z / 2.0;
             let pts = vec![
                 Pos2::new(pos.x, pos.y - r),
-                Pos2::new(pos.x - r*0.866, pos.y + r*0.5),
-                Pos2::new(pos.x + r*0.866, pos.y + r*0.5),
+                Pos2::new(pos.x - r*COS_30, pos.y + r*SIN_30),
+                Pos2::new(pos.x + r*COS_30, pos.y + r*SIN_30),
             ];
             painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
             if selected { painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel)); }
         }
         ObjType::Text { content, font_size } => {
-            let fs = (font_size * s * z / 48.0 * 18.0).clamp(8.0, 72.0);
+            let fs = (font_size * s * z / FONT_SIZE_SCALE * 18.0).clamp(8.0, 72.0);
             painter.text(pos, egui::Align2::CENTER_CENTER, content,
                 egui::FontId::proportional(fs), stroke_col);
             if selected {
@@ -1070,9 +1081,9 @@ fn approx_r(obj: &ManimObject) -> f32 {
         ObjType::Rectangle { width, height } => width.max(*height) * 0.5,
         ObjType::Triangle { side_length }    => side_length * 0.577,
         ObjType::Sphere { radius }           => *radius,
-        ObjType::Cube { side_length }        => side_length * 0.866,
+        ObjType::Cube { side_length }        => side_length * COS_30,
         ObjType::Cylinder { radius, .. }     => *radius,
-        ObjType::Text { font_size, .. }      => font_size / 48.0,
+        ObjType::Text { font_size, .. }      => font_size / FONT_SIZE_SCALE,
         ObjType::NumberPlane | ObjType::Axes => 5.0,
         _ => 0.5,
     }
