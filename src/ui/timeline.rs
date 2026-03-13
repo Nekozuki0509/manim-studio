@@ -1,10 +1,12 @@
 use crate::app::{ManimStudio, TlDrag, TlDragMode};
+use crate::scene::max_lane_for_object;
 use egui::{Color32, Context, CursorIcon, Pos2, Rect, Stroke, Vec2};
 
 const TRACK_H: f32 = 26.0;
 const HEADER_W: f32 = 150.0;
 const RULER_H: f32 = 22.0;
 const EDGE_ZONE: f32 = 8.0; // px from each edge = resize handle
+const LANE_HEADER_INDENT: f32 = 20.0; // extra indent for sub-lane labels
 
 pub fn show(app: &mut ManimStudio, ctx: &Context) {
     egui::TopBottomPanel::bottom("timeline")
@@ -39,45 +41,53 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
 
             draw_ruler(&painter, avail, zoom, scroll);
 
-            // ── Collect hit tests before mut borrows ──────────────────────────
-            // We resolve: what did the mouse press on?
-            // Possible outcomes:
-            //   - drag start on block center → Move
-            //   - drag start on block left edge → ResizeLeft
-            //   - drag start on block right edge → ResizeRight
-            //   - click on empty area → seek playhead
-            //   - click on ruler → seek playhead
-
             let mouse_pos = resp.interact_pointer_pos();
             let drag_started = resp.drag_started();
             let is_dragging  = resp.dragged();
             let just_released = resp.drag_stopped();
             let clicked = resp.clicked();
 
-            // Build list of (object rows) for hit-testing
-            let objects: Vec<(String, String, &str)> = app.scene.objects
-                .iter()
-                .map(|o| (o.id.clone(), o.name.clone(), o.icon()))
-                .collect();
+            // Build row layout: each object has (max_lane + 1) visual rows.
+            // A "row entry" is (obj_id, obj_name, obj_icon, lane_index, num_lanes).
+            struct RowEntry {
+                obj_id: String,
+                obj_name: String,
+                obj_icon: String,
+                lane: u32,
+                num_lanes: u32,
+            }
+
+            let mut rows: Vec<RowEntry> = Vec::new();
+            for obj in &app.scene.objects {
+                let max_lane = max_lane_for_object(&app.scene.animations, &obj.id);
+                let num_lanes = max_lane + 1;
+                for lane in 0..num_lanes {
+                    rows.push(RowEntry {
+                        obj_id: obj.id.clone(),
+                        obj_name: obj.name.clone(),
+                        obj_icon: obj.icon().to_string(),
+                        lane,
+                        num_lanes,
+                    });
+                }
+            }
 
             // ── Track rows ────────────────────────────────────────────────────
             let mut hovered_cursor = CursorIcon::Default;
             let sel_obj  = app.selected_obj.clone();
             let sel_anim = app.selected_anim.clone();
 
-            // We need to decide which anim the drag started on (if any),
-            // and whether any block was under a click.
-            let mut drag_start_info: Option<(String, TlDragMode, f32, f32, f32)> = None; // (anim_id, mode, orig_start, orig_dur, origin_x)
+            let mut drag_start_info: Option<(String, TlDragMode, f32, f32, f32)> = None;
             let mut click_on_block = false;
 
-            for (row, (obj_id, obj_name, obj_icon)) in objects.iter().enumerate() {
-                let y = track_y0 + row as f32 * TRACK_H;
+            for (visual_row, entry) in rows.iter().enumerate() {
+                let y = track_y0 + visual_row as f32 * TRACK_H;
                 if y > avail.max.y { break; }
 
                 // Row background
-                let row_bg = if sel_obj.as_deref() == Some(obj_id) {
+                let row_bg = if sel_obj.as_deref() == Some(&entry.obj_id) {
                     Color32::from_rgb(38, 40, 55)
-                } else if row % 2 == 0 {
+                } else if visual_row % 2 == 0 {
                     Color32::from_rgb(26, 26, 32)
                 } else {
                     Color32::from_rgb(30, 30, 38)
@@ -87,22 +97,55 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                     0.0, row_bg,
                 );
 
-                // Object label
-                painter.text(
-                    Pos2::new(avail.min.x + 8.0, y + TRACK_H / 2.0),
-                    egui::Align2::LEFT_CENTER,
-                    format!("{} {}", obj_icon, obj_name),
-                    egui::FontId::proportional(12.0),
-                    if sel_obj.as_deref() == Some(obj_id) {
-                        Color32::from_rgb(255, 220, 80)
+                // Object label (only on lane 0, or show "lane N" for sub-lanes)
+                if entry.lane == 0 {
+                    let label_text = if entry.num_lanes > 1 {
+                        format!("{} {} [L0]", entry.obj_icon, entry.obj_name)
                     } else {
-                        Color32::from_rgb(190, 190, 200)
-                    },
-                );
+                        format!("{} {}", entry.obj_icon, entry.obj_name)
+                    };
+                    painter.text(
+                        Pos2::new(avail.min.x + 8.0, y + TRACK_H / 2.0),
+                        egui::Align2::LEFT_CENTER,
+                        &label_text,
+                        egui::FontId::proportional(12.0),
+                        if sel_obj.as_deref() == Some(&entry.obj_id) {
+                            Color32::from_rgb(255, 220, 80)
+                        } else {
+                            Color32::from_rgb(190, 190, 200)
+                        },
+                    );
+                    // "+" button to add a new lane
+                    let btn_rect = Rect::from_center_size(
+                        Pos2::new(avail.min.x + HEADER_W - 14.0, y + TRACK_H / 2.0),
+                        Vec2::splat(16.0),
+                    );
+                    let btn_hovered = mouse_pos.map_or(false, |mp| btn_rect.contains(mp));
+                    painter.rect_filled(btn_rect, 3.0,
+                        if btn_hovered { Color32::from_rgb(60, 60, 80) } else { Color32::from_rgb(40, 40, 55) });
+                    painter.text(btn_rect.center(), egui::Align2::CENTER_CENTER, "+",
+                        egui::FontId::proportional(12.0), Color32::from_rgb(160, 160, 200));
+                    if clicked && btn_hovered {
+                        // Add a default Create animation to a new lane
+                        let next_lane = entry.num_lanes;
+                        let t = app.scene.timeline.current_time;
+                        let new_anim = crate::scene::AnimEntry::new_on_lane(&entry.obj_id, crate::scene::AnimType::Create, t, next_lane);
+                        app.scene.animations.push(new_anim);
+                        click_on_block = true; // prevent seek
+                    }
+                } else {
+                    painter.text(
+                        Pos2::new(avail.min.x + 8.0 + LANE_HEADER_INDENT, y + TRACK_H / 2.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("└ Lane {}", entry.lane),
+                        egui::FontId::proportional(11.0),
+                        Color32::from_rgb(130, 130, 160),
+                    );
+                }
 
-                // Anim blocks
+                // Anim blocks for this object + lane
                 let anim_ids: Vec<String> = app.scene.animations.iter()
-                    .filter(|a| &a.object_id == obj_id)
+                    .filter(|a| a.object_id == entry.obj_id && a.lane == entry.lane)
                     .map(|a| a.id.clone())
                     .collect();
 
@@ -145,6 +188,7 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                         );
                     }
 
+                    // Block label
                     if block.width() > 30.0 {
                         painter.text(
                             block.center(), egui::Align2::CENTER_CENTER,
@@ -159,7 +203,6 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                         if block.contains(mp) {
                             click_on_block = true;
 
-                            // Determine cursor & mode based on edge proximity
                             let mode = if mp.x <= bx0 + EDGE_ZONE && bx0 >= track_x0 {
                                 hovered_cursor = CursorIcon::ResizeHorizontal;
                                 TlDragMode::ResizeLeft
@@ -177,11 +220,6 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                                     anim.start_time, anim.duration,
                                     mp.x,
                                 ));
-                            }
-
-                            // Click on block → only select, no seek
-                            if clicked {
-                                // selection handled below after borrow ends
                             }
                         }
                     }
@@ -228,7 +266,6 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                                 anim.duration = (drag.orig_dur + dt).max(0.05);
                             }
                             TlDragMode::ResizeLeft => {
-                                // Moving left edge: start moves, duration shrinks
                                 let new_start = (drag.orig_start + dt)
                                     .max(0.0)
                                     .min(drag.orig_start + drag.orig_dur - 0.05);
@@ -246,10 +283,11 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
             // ── Click on block → select anim only (no seek) ──────────────────
             if clicked && click_on_block {
                 if let Some(mp) = mouse_pos {
-                    // Find which anim was clicked
-                    'outer: for (row, (obj_id, _, _)) in objects.iter().enumerate() {
-                        let y = track_y0 + row as f32 * TRACK_H;
-                        for anim in app.scene.animations.iter().filter(|a| &a.object_id == obj_id) {
+                    'outer: for (visual_row, entry) in rows.iter().enumerate() {
+                        let y = track_y0 + visual_row as f32 * TRACK_H;
+                        for anim in app.scene.animations.iter()
+                            .filter(|a| a.object_id == entry.obj_id && a.lane == entry.lane)
+                        {
                             let bx0 = track_x0 + (anim.start_time - scroll) * zoom;
                             let bx1 = bx0 + anim.duration * zoom;
                             let block = Rect::from_min_max(
@@ -268,7 +306,6 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
             // ── Click on empty area → seek ────────────────────────────────────
             if clicked && !click_on_block {
                 if let Some(mp) = mouse_pos {
-                    // Ruler or empty track area both seek
                     let t = ((mp.x - track_x0) / zoom + scroll).clamp(0.0, app.scene.timeline.duration);
                     app.scene.timeline.current_time = t;
                 }

@@ -39,6 +39,26 @@ pub struct TlDrag {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Blender-style interaction modes
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum InteractionMode {
+    Normal,
+    Grab,
+    Scale,
+    Rotate,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AxisConstraint {
+    None,
+    X,
+    Y,
+    Z,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // App state
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -56,6 +76,14 @@ pub struct ManimStudio {
 
     // Viewport (3D camera — used when scene.is_3d)
     pub cam3d: Camera3D,
+
+    // Blender-style interaction
+    pub interaction_mode: InteractionMode,
+    pub axis_constraint: AxisConstraint,
+    pub mode_origin_pos: [f32; 3],
+    pub mode_origin_scale: f32,
+    pub mode_origin_rotation: f32,
+    pub mode_start_mouse: Option<egui::Pos2>,
 
     // Timeline
     pub tl_zoom: f32,    // pixels per second
@@ -140,6 +168,12 @@ impl ManimStudio {
             vp_zoom: 60.0,
             vp_pan: egui::Vec2::ZERO,
             cam3d: Camera3D::default(),
+            interaction_mode: InteractionMode::Normal,
+            axis_constraint: AxisConstraint::None,
+            mode_origin_pos: [0.0; 3],
+            mode_origin_scale: 1.0,
+            mode_origin_rotation: 0.0,
+            mode_start_mouse: None,
             tl_zoom: 80.0,
             tl_scroll: 0.0,
             tl_drag: None,
@@ -292,6 +326,62 @@ impl ManimStudio {
             }
         }
     }
+
+    // ── Blender-style interaction ────────────────────────────────────────────
+
+    /// Enter a Grab/Scale/Rotate mode for the currently selected object.
+    pub fn enter_mode(&mut self, mode: InteractionMode) {
+        if let Some(id) = &self.selected_obj {
+            let snapshot = self.scene.get_object(id).map(|obj| {
+                (obj.position, obj.scale, obj.rotation)
+            });
+            if let Some((pos, scale, rot)) = snapshot {
+                self.push_history();
+                self.mode_origin_pos = pos;
+                self.mode_origin_scale = scale;
+                self.mode_origin_rotation = rot;
+                self.mode_start_mouse = None;
+                self.axis_constraint = AxisConstraint::None;
+                self.interaction_mode = mode;
+            }
+        }
+    }
+
+    /// Confirm the current transformation.
+    pub fn confirm_mode(&mut self) {
+        self.interaction_mode = InteractionMode::Normal;
+        self.axis_constraint = AxisConstraint::None;
+        self.mode_start_mouse = None;
+    }
+
+    /// Cancel the current transformation and restore original values.
+    pub fn cancel_mode(&mut self) {
+        if let Some(id) = &self.selected_obj {
+            let id = id.clone();
+            if let Some(obj) = self.scene.get_object_mut(&id) {
+                obj.position = self.mode_origin_pos;
+                obj.scale = self.mode_origin_scale;
+                obj.rotation = self.mode_origin_rotation;
+            }
+        }
+        self.interaction_mode = InteractionMode::Normal;
+        self.axis_constraint = AxisConstraint::None;
+        self.mode_start_mouse = None;
+        // Manually revert the undo snapshot pushed by enter_mode(), without
+        // clearing the selection (which self.undo() would do).
+        if self.history_cursor > 0 {
+            self.history_cursor -= 1;
+            self.history.truncate(self.history_cursor);
+        }
+    }
+
+    /// Set camera to a preset view (for 3D mode).
+    pub fn set_view_preset(&mut self, phi: f32, theta: f32) {
+        self.cam3d.phi = phi;
+        self.cam3d.theta = theta;
+        self.scene.camera_phi = phi;
+        self.scene.camera_theta = theta;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,6 +410,78 @@ impl eframe::App for ManimStudio {
 
         // ── Keyboard shortcuts ───────────────────────────────────────────────
         let ctrl = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
+        let in_mode = self.interaction_mode != InteractionMode::Normal;
+
+        // --- Blender-style interaction mode keys ---
+
+        // Escape / Right-click → cancel current mode
+        if in_mode && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.cancel_mode();
+        }
+        // Enter → confirm current mode
+        if in_mode && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.confirm_mode();
+        }
+
+        // Axis constraints (only active during Grab/Scale/Rotate)
+        if in_mode {
+            if ctx.input(|i| i.key_pressed(egui::Key::X)) {
+                self.axis_constraint = if self.axis_constraint == AxisConstraint::X {
+                    AxisConstraint::None
+                } else {
+                    AxisConstraint::X
+                };
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Y)) {
+                self.axis_constraint = if self.axis_constraint == AxisConstraint::Y {
+                    AxisConstraint::None
+                } else {
+                    AxisConstraint::Y
+                };
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Z)) {
+                self.axis_constraint = if self.axis_constraint == AxisConstraint::Z {
+                    AxisConstraint::None
+                } else {
+                    AxisConstraint::Z
+                };
+            }
+        }
+
+        // G → Grab (move) mode
+        if !in_mode && !ctrl && ctx.input(|i| i.key_pressed(egui::Key::G)) && self.selected_obj.is_some() {
+            self.enter_mode(InteractionMode::Grab);
+        }
+        // S → Scale mode (only without Ctrl to avoid conflict with save)
+        if !in_mode && !ctrl && ctx.input(|i| i.key_pressed(egui::Key::S)) && self.selected_obj.is_some() {
+            self.enter_mode(InteractionMode::Scale);
+        }
+        // R → Rotate mode
+        if !in_mode && !ctrl && ctx.input(|i| i.key_pressed(egui::Key::R)) && self.selected_obj.is_some() {
+            self.enter_mode(InteractionMode::Rotate);
+        }
+
+        // --- 3D view presets (Blender numpad style) ---
+        if !in_mode && !ctrl && self.scene.is_3d {
+            // 1 → Front view (looking from -Y toward +Y: phi=90°, theta=0°)
+            if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
+                self.set_view_preset(90.0, 0.0);
+            }
+            // 3 → Right view (looking from +X toward -X: phi=90°, theta=-90°)
+            if ctx.input(|i| i.key_pressed(egui::Key::Num3)) {
+                self.set_view_preset(90.0, -90.0);
+            }
+            // 7 → Top view (looking from +Z down: phi=1°, theta=0°)
+            if ctx.input(|i| i.key_pressed(egui::Key::Num7)) {
+                self.set_view_preset(1.0, 0.0);
+            }
+            // 0 → Default perspective (Manim default: phi=70°, theta=-45°)
+            if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
+                self.set_view_preset(70.0, -45.0);
+            }
+        }
+
+        // --- Standard shortcuts (Ctrl combos and others) ---
 
         if ctx.input(|i| i.key_pressed(egui::Key::Z)) && ctrl {
             if ctx.input(|i| i.modifiers.shift) {
@@ -343,11 +505,11 @@ impl eframe::App for ManimStudio {
         if ctx.input(|i| i.key_pressed(egui::Key::D)) && ctrl {
             self.duplicate_selected();
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+        if !in_mode && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
             self.delete_selected();
         }
         // Space = play/pause
-        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        if !in_mode && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.is_playing = !self.is_playing;
         }
         // Home = rewind
@@ -356,11 +518,26 @@ impl eframe::App for ManimStudio {
             self.is_playing = false;
         }
 
+        // Arrow keys = move timeline playhead
+        if !in_mode {
+            let step = if ctrl { 1.0 } else { 0.1 }; // Ctrl = larger step
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+                self.scene.timeline.current_time = (self.scene.timeline.current_time + step)
+                    .min(self.scene.timeline.duration);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+                self.scene.timeline.current_time = (self.scene.timeline.current_time - step)
+                    .max(0.0);
+            }
+        }
+
         // ── Layout ───────────────────────────────────────────────────────────
+        // Side panels must render before bottom panel so the timeline fits
+        // between them and does not overlap the properties panel.
         crate::ui::toolbar::show(self, ctx);
-        crate::ui::timeline::show(self, ctx);
         crate::ui::objects_panel::show(self, ctx);
         crate::ui::properties::show(self, ctx);
+        crate::ui::timeline::show(self, ctx);
         crate::ui::viewport::show(self, ctx);
 
         // ── Floating windows ─────────────────────────────────────────────────
