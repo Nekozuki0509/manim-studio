@@ -245,6 +245,363 @@ fn show_type_props(app: &mut ManimStudio, ui: &mut egui::Ui, id: &str, ot: &ObjT
                 }
             });
         }
+        ObjType::Triangle { side_length } => {
+            let mut s = *side_length;
+            ui.horizontal(|ui| {
+                ui.label("Side:");
+                if ui.add(egui::DragValue::new(&mut s).speed(0.05).clamp_range(0.1..=20.0)).changed() {
+                    if let Some(obj) = app.scene.get_object_mut(id) {
+                        obj.object_type = ObjType::Triangle { side_length: s };
+                    }
+                }
+            });
+        }
+        ObjType::Cube { side_length } => {
+            let mut s = *side_length;
+            ui.horizontal(|ui| {
+                ui.label("Side:");
+                if ui.add(egui::DragValue::new(&mut s).speed(0.05).clamp_range(0.1..=20.0)).changed() {
+                    if let Some(obj) = app.scene.get_object_mut(id) {
+                        obj.object_type = ObjType::Cube { side_length: s };
+                    }
+                }
+            });
+        }
+        ObjType::Ellipse { width, height } => {
+            let mut w = *width; let mut h = *height;
+            ui.horizontal(|ui| {
+                ui.label("W:");
+                ui.add(egui::DragValue::new(&mut w).speed(0.05).clamp_range(0.1..=20.0));
+                ui.label("H:");
+                if ui.add(egui::DragValue::new(&mut h).speed(0.05).clamp_range(0.1..=20.0)).changed() || w != *width {
+                    if let Some(obj) = app.scene.get_object_mut(id) {
+                        obj.object_type = ObjType::Ellipse { width: w, height: h };
+                    }
+                }
+            });
+        }
+        ObjType::Arc { radius, start_angle, angle } => {
+            let mut r = *radius; let mut sa = *start_angle; let mut a = *angle;
+            ui.horizontal(|ui| {
+                ui.label("R:");
+                ui.add(egui::DragValue::new(&mut r).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Start°:");
+                ui.add(egui::DragValue::new(&mut sa).speed(1.0).clamp_range(-360.0..=360.0));
+                ui.label("Angle°:");
+                ui.add(egui::DragValue::new(&mut a).speed(1.0).clamp_range(-360.0..=360.0));
+            });
+            if r != *radius || sa != *start_angle || a != *angle {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Arc { radius: r, start_angle: sa, angle: a };
+                }
+            }
+        }
+        ObjType::ArcBetweenPoints { start, end, angle } => {
+            let mut s = *start; let mut e = *end; let mut a = *angle;
+            ui.label("Start:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut s[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut s[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut s[2]).speed(0.05).prefix("z:"));
+            });
+            ui.label("End:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut e[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut e[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut e[2]).speed(0.05).prefix("z:"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Angle°:");
+                ui.add(egui::DragValue::new(&mut a).speed(1.0).clamp_range(-360.0..=360.0));
+            });
+            if s != *start || e != *end || a != *angle {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::ArcBetweenPoints { start: s, end: e, angle: a };
+                }
+            }
+        }
+        ObjType::Annulus { inner_radius, outer_radius } => {
+            let mut ri = *inner_radius; let mut ro = *outer_radius;
+            ui.horizontal(|ui| {
+                ui.label("Inner R:");
+                ui.add(egui::DragValue::new(&mut ri).speed(0.05).clamp_range(0.05..=19.0));
+                ui.label("Outer R:");
+                ui.add(egui::DragValue::new(&mut ro).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            if ri != *inner_radius || ro != *outer_radius {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Annulus { inner_radius: ri, outer_radius: ro };
+                }
+            }
+        }
+        ObjType::Sector { radius, start_angle, angle } => {
+            let mut r = *radius; let mut sa = *start_angle; let mut a = *angle;
+            ui.horizontal(|ui| {
+                ui.label("R:");
+                ui.add(egui::DragValue::new(&mut r).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Start°:");
+                ui.add(egui::DragValue::new(&mut sa).speed(1.0));
+                ui.label("Angle°:");
+                ui.add(egui::DragValue::new(&mut a).speed(1.0));
+            });
+            if r != *radius || sa != *start_angle || a != *angle {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Sector { radius: r, start_angle: sa, angle: a };
+                }
+            }
+        }
+        ObjType::RegularPolygon { n, radius } => {
+            let mut nn = *n; let mut r = *radius;
+            ui.horizontal(|ui| {
+                ui.label("Sides:");
+                ui.add(egui::DragValue::new(&mut nn).speed(0.1).clamp_range(3..=50));
+                ui.label("R:");
+                ui.add(egui::DragValue::new(&mut r).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            if nn != *n || r != *radius {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::RegularPolygon { n: nn, radius: r };
+                }
+            }
+        }
+        ObjType::Star { n, outer_radius, inner_radius } => {
+            let mut nn = *n; let mut ro = *outer_radius; let mut ri = *inner_radius;
+            ui.horizontal(|ui| {
+                ui.label("Points:");
+                ui.add(egui::DragValue::new(&mut nn).speed(0.1).clamp_range(3..=20));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Outer R:");
+                ui.add(egui::DragValue::new(&mut ro).speed(0.05).clamp_range(0.1..=20.0));
+                ui.label("Inner R:");
+                ui.add(egui::DragValue::new(&mut ri).speed(0.05).clamp_range(0.05..=19.0));
+            });
+            if nn != *n || ro != *outer_radius || ri != *inner_radius {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Star { n: nn, outer_radius: ro, inner_radius: ri };
+                }
+            }
+        }
+        ObjType::RoundedRectangle { width, height, corner_radius } => {
+            let mut w = *width; let mut h = *height; let mut cr = *corner_radius;
+            ui.horizontal(|ui| {
+                ui.label("W:");
+                ui.add(egui::DragValue::new(&mut w).speed(0.05).clamp_range(0.1..=20.0));
+                ui.label("H:");
+                ui.add(egui::DragValue::new(&mut h).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Corner R:");
+                ui.add(egui::DragValue::new(&mut cr).speed(0.02).clamp_range(0.0..=5.0));
+            });
+            if w != *width || h != *height || cr != *corner_radius {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::RoundedRectangle { width: w, height: h, corner_radius: cr };
+                }
+            }
+        }
+        ObjType::Line { start, end } | ObjType::Arrow { start, end }
+        | ObjType::DashedLine { start, end, .. } | ObjType::DoubleArrow { start, end }
+        | ObjType::BraceBetweenPoints { start, end } | ObjType::Arrow3D { start, end }
+        | ObjType::Line3D { start, end } => {
+            let mut s = *start; let mut e = *end;
+            ui.label("Start:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut s[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut s[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut s[2]).speed(0.05).prefix("z:"));
+            });
+            ui.label("End:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut e[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut e[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut e[2]).speed(0.05).prefix("z:"));
+            });
+            if s != *start || e != *end {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    match &obj.object_type {
+                        ObjType::Line { .. } => obj.object_type = ObjType::Line { start: s, end: e },
+                        ObjType::Arrow { .. } => obj.object_type = ObjType::Arrow { start: s, end: e },
+                        ObjType::DashedLine { dash_length, .. } => {
+                            let dl = *dash_length;
+                            obj.object_type = ObjType::DashedLine { start: s, end: e, dash_length: dl };
+                        }
+                        ObjType::DoubleArrow { .. } => obj.object_type = ObjType::DoubleArrow { start: s, end: e },
+                        ObjType::BraceBetweenPoints { .. } => obj.object_type = ObjType::BraceBetweenPoints { start: s, end: e },
+                        ObjType::Arrow3D { .. } => obj.object_type = ObjType::Arrow3D { start: s, end: e },
+                        ObjType::Line3D { .. } => obj.object_type = ObjType::Line3D { start: s, end: e },
+                        ObjType::ArcBetweenPoints { angle, .. } => {
+                            let a = *angle;
+                            obj.object_type = ObjType::ArcBetweenPoints { start: s, end: e, angle: a };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        ObjType::Vector { direction } => {
+            let mut d = *direction;
+            ui.label("Direction:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut d[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut d[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut d[2]).speed(0.05).prefix("z:"));
+            });
+            if d != *direction {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Vector { direction: d };
+                }
+            }
+        }
+        ObjType::Brace { direction, length } => {
+            let mut d = *direction; let mut l = *length;
+            ui.horizontal(|ui| {
+                ui.label("Length:");
+                ui.add(egui::DragValue::new(&mut l).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            ui.label("Direction:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut d[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut d[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut d[2]).speed(0.05).prefix("z:"));
+            });
+            if d != *direction || l != *length {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Brace { direction: d, length: l };
+                }
+            }
+        }
+        ObjType::Angle { radius, start_angle, angle } => {
+            let mut r = *radius; let mut sa = *start_angle; let mut a = *angle;
+            ui.horizontal(|ui| {
+                ui.label("R:");
+                ui.add(egui::DragValue::new(&mut r).speed(0.05).clamp_range(0.1..=10.0));
+                ui.label("Start°:");
+                ui.add(egui::DragValue::new(&mut sa).speed(1.0));
+                ui.label("Angle°:");
+                ui.add(egui::DragValue::new(&mut a).speed(1.0));
+            });
+            if r != *radius || sa != *start_angle || a != *angle {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Angle { radius: r, start_angle: sa, angle: a };
+                }
+            }
+        }
+        ObjType::RightAngle { size } => {
+            let mut sz = *size;
+            ui.horizontal(|ui| {
+                ui.label("Size:");
+                if ui.add(egui::DragValue::new(&mut sz).speed(0.05).clamp_range(0.1..=5.0)).changed() {
+                    if let Some(obj) = app.scene.get_object_mut(id) {
+                        obj.object_type = ObjType::RightAngle { size: sz };
+                    }
+                }
+            });
+        }
+        ObjType::NumberLine { x_min, x_max, step } => {
+            let mut mn = *x_min; let mut mx = *x_max; let mut st = *step;
+            ui.horizontal(|ui| {
+                ui.label("Min:");
+                ui.add(egui::DragValue::new(&mut mn).speed(0.1));
+                ui.label("Max:");
+                ui.add(egui::DragValue::new(&mut mx).speed(0.1));
+                ui.label("Step:");
+                ui.add(egui::DragValue::new(&mut st).speed(0.1).clamp_range(0.1..=10.0));
+            });
+            if mn != *x_min || mx != *x_max || st != *step {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::NumberLine { x_min: mn, x_max: mx, step: st };
+                }
+            }
+        }
+        ObjType::BarChart { values, bar_width } => {
+            let mut bw = *bar_width;
+            ui.horizontal(|ui| {
+                ui.label("Bar Width:");
+                if ui.add(egui::DragValue::new(&mut bw).speed(0.05).clamp_range(0.1..=5.0)).changed() {
+                    if let Some(obj) = app.scene.get_object_mut(id) {
+                        if let ObjType::BarChart { values, .. } = &obj.object_type {
+                            let v = values.clone();
+                            obj.object_type = ObjType::BarChart { values: v, bar_width: bw };
+                        }
+                    }
+                }
+            });
+            ui.label(format!("Values: {:?}", values));
+        }
+        ObjType::DecimalNumber { number, num_decimal_places } => {
+            let mut num = *number; let mut dp = *num_decimal_places;
+            ui.horizontal(|ui| {
+                ui.label("Number:");
+                ui.add(egui::DragValue::new(&mut num).speed(0.1));
+                ui.label("Decimals:");
+                ui.add(egui::DragValue::new(&mut dp).speed(0.1).clamp_range(0..=10));
+            });
+            if num != *number || dp != *num_decimal_places {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::DecimalNumber { number: num, num_decimal_places: dp };
+                }
+            }
+        }
+        ObjType::Integer { number } => {
+            let mut n = *number;
+            ui.horizontal(|ui| {
+                ui.label("Number:");
+                if ui.add(egui::DragValue::new(&mut n).speed(1.0)).changed() {
+                    if let Some(obj) = app.scene.get_object_mut(id) {
+                        obj.object_type = ObjType::Integer { number: n };
+                    }
+                }
+            });
+        }
+        ObjType::Cone { radius, height } => {
+            let mut r = *radius; let mut h = *height;
+            ui.horizontal(|ui| {
+                ui.label("R:");
+                ui.add(egui::DragValue::new(&mut r).speed(0.05).clamp_range(0.1..=20.0));
+                ui.label("H:");
+                ui.add(egui::DragValue::new(&mut h).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            if r != *radius || h != *height {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Cone { radius: r, height: h };
+                }
+            }
+        }
+        ObjType::Torus { major_radius, minor_radius } => {
+            let mut mr = *major_radius; let mut mnr = *minor_radius;
+            ui.horizontal(|ui| {
+                ui.label("Major R:");
+                ui.add(egui::DragValue::new(&mut mr).speed(0.05).clamp_range(0.1..=20.0));
+                ui.label("Minor R:");
+                ui.add(egui::DragValue::new(&mut mnr).speed(0.05).clamp_range(0.05..=10.0));
+            });
+            if mr != *major_radius || mnr != *minor_radius {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Torus { major_radius: mr, minor_radius: mnr };
+                }
+            }
+        }
+        ObjType::Prism { width, height, depth } => {
+            let mut w = *width; let mut h = *height; let mut d = *depth;
+            ui.horizontal(|ui| {
+                ui.label("W:");
+                ui.add(egui::DragValue::new(&mut w).speed(0.05).clamp_range(0.1..=20.0));
+                ui.label("H:");
+                ui.add(egui::DragValue::new(&mut h).speed(0.05).clamp_range(0.1..=20.0));
+                ui.label("D:");
+                ui.add(egui::DragValue::new(&mut d).speed(0.05).clamp_range(0.1..=20.0));
+            });
+            if w != *width || h != *height || d != *depth {
+                if let Some(obj) = app.scene.get_object_mut(id) {
+                    obj.object_type = ObjType::Prism { width: w, height: h, depth: d };
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -353,6 +710,68 @@ fn show_anim_props(app: &mut ManimStudio, ui: &mut egui::Ui, id: &str) {
                     }
                 }
             });
+        }
+        AnimType::GrowFromPoint { point } => {
+            let mut p = point;
+            ui.label("Point:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut p[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut p[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut p[2]).speed(0.05).prefix("z:"));
+            });
+            if p != point {
+                if let Some(anim) = app.scene.animations.iter_mut().find(|a| a.id == *id) {
+                    anim.anim_type = AnimType::GrowFromPoint { point: p };
+                }
+            }
+        }
+        AnimType::GrowFromEdge { edge } => {
+            let mut e = edge;
+            ui.label("Edge direction:");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut e[0]).speed(0.05).prefix("x:"));
+                ui.add(egui::DragValue::new(&mut e[1]).speed(0.05).prefix("y:"));
+                ui.add(egui::DragValue::new(&mut e[2]).speed(0.05).prefix("z:"));
+            });
+            if e != edge {
+                if let Some(anim) = app.scene.animations.iter_mut().find(|a| a.id == *id) {
+                    anim.anim_type = AnimType::GrowFromEdge { edge: e };
+                }
+            }
+        }
+        AnimType::Transform { target_id } | AnimType::FadeTransform { target_id }
+        | AnimType::ReplacementTransform { target_id }
+        | AnimType::CounterclockwiseTransform { target_id }
+        | AnimType::ClockwiseTransform { target_id } => {
+            let mut tid = target_id.clone();
+            let obj_names: Vec<(String, String)> = app.scene.objects.iter()
+                .map(|o| (o.id.clone(), o.name.clone())).collect();
+            ui.horizontal(|ui| {
+                ui.label("Target:");
+                egui::ComboBox::from_id_source("transform_target_combo")
+                    .selected_text(
+                        app.scene.get_object(&tid).map(|o| o.name.as_str()).unwrap_or("(none)")
+                    )
+                    .show_ui(ui, |ui| {
+                        for (oid, oname) in &obj_names {
+                            if ui.selectable_label(*oid == tid, oname).clicked() {
+                                tid = oid.clone();
+                            }
+                        }
+                    });
+            });
+            if tid != *target_id {
+                if let Some(anim) = app.scene.animations.iter_mut().find(|a| a.id == *id) {
+                    match &anim.anim_type {
+                        AnimType::Transform { .. } => anim.anim_type = AnimType::Transform { target_id: tid },
+                        AnimType::FadeTransform { .. } => anim.anim_type = AnimType::FadeTransform { target_id: tid },
+                        AnimType::ReplacementTransform { .. } => anim.anim_type = AnimType::ReplacementTransform { target_id: tid },
+                        AnimType::CounterclockwiseTransform { .. } => anim.anim_type = AnimType::CounterclockwiseTransform { target_id: tid },
+                        AnimType::ClockwiseTransform { .. } => anim.anim_type = AnimType::ClockwiseTransform { target_id: tid },
+                        _ => {}
+                    }
+                }
+            }
         }
         _ => {}
     }

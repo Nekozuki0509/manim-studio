@@ -375,8 +375,10 @@ fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn draw_3d_grid(painter: &Painter, proj: &Projection3D) {
-    // Extend grid to cover the visible area; compute range from zoom level
-    let range = ((20.0 * 60.0 / proj.zoom) as i32).clamp(10, 100);
+    // Make the grid effectively infinite: compute how far we need to extend
+    // grid lines so they always cover the visible viewport, regardless of zoom
+    // or pan. We use a generous factor based on viewport diagonal / zoom.
+    let range = ((3000.0 / proj.zoom) as i32).max(50);
     let grid_col  = Color32::from_rgba_premultiplied(50, 55, 65, 120);
     let major_col = Color32::from_rgba_premultiplied(65, 70, 85, 160);
 
@@ -593,30 +595,29 @@ fn draw_obj_3d(
             let p2 = proj.project([end[0], end[1], end[2]]);
             painter.line_segment([p1, p2], stroke);
         }
-        // Text / MathTex: render as flat text plane in XY, oriented in 3D space
+        // Text / MathTex: render as a flat plane in XY, properly projected in 3D.
+        // The text content is drawn along the projected X-axis of the plane
+        // (NOT as a screen-aligned billboard).
         ObjType::Text { content, font_size } => {
-            // Approximate text extents in Manim units
             let char_w = font_size * s / FONT_SIZE_SCALE * 0.5;
             let text_w = char_w * content.len() as f32;
             let text_h = font_size * s / FONT_SIZE_SCALE * 0.8;
             let hw = text_w / 2.0;
             let hh = text_h / 2.0;
-            // Project four corners of the text plane (lying in XY at the object's Z)
             let corners: Vec<Pos2> = vec![
                 [-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh],
             ].iter().map(|[dx, dy]| {
                 proj.project([pos3[0] + dx, pos3[1] + dy, pos3[2]])
             }).collect();
-            // Draw text background plane
+            // Draw the text background plane lying flat in XY
             painter.add(egui::Shape::convex_polygon(
                 corners.clone(),
                 Color32::from_rgba_premultiplied(0, 0, 0, 30),
                 Stroke::new(0.5, stroke_col),
             ));
-            // Draw the text at the projected center (readable but bounded by the plane)
-            let fs = (font_size * s * z / FONT_SIZE_SCALE * 14.0).clamp(8.0, 60.0);
-            painter.text(center, egui::Align2::CENTER_CENTER, content,
-                egui::FontId::proportional(fs), stroke_col);
+            // Render the text string within the projected plane using per-character
+            // positioning along the plane's local X axis, so it rotates with the view.
+            draw_text_on_plane(painter, proj, content, pos3, text_w, s, stroke_col);
             if selected {
                 painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
             }
@@ -637,18 +638,218 @@ fn draw_obj_3d(
                 Color32::from_rgba_premultiplied(0, 0, 0, 30),
                 Stroke::new(0.5, stroke_col),
             ));
-            let fs = (14.0 * s * z / 60.0).clamp(8.0, 48.0);
-            painter.text(center, egui::Align2::CENTER_CENTER, content,
-                egui::FontId::monospace(fs), stroke_col);
+            draw_text_on_plane(painter, proj, content, pos3, text_w, s, stroke_col);
             if selected {
                 painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
             }
         }
-        // Fallback — draw as a small dot at projected position
+        // Fallback — draw projected shape at position for types with simple geometry
         _ => {
-            let r = approx_r(obj) * s * z;
-            painter.circle(center, r.max(4.0), fill, stroke);
-            if selected { painter.circle_stroke(center, r+3.0, sel_s); }
+            // For types with specific 3D projectable geometry, handle them:
+            match &obj.object_type {
+                ObjType::Ellipse { width, height } => {
+                    let n = 48;
+                    let hw = width * s / 2.0;
+                    let hh = height * s / 2.0;
+                    let pts: Vec<Pos2> = (0..n).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                        proj.project([pos3[0] + hw * angle.cos(), pos3[1] + hh * angle.sin(), pos3[2]])
+                    }).collect();
+                    if pts.len() >= 3 {
+                        painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+                    }
+                    if selected {
+                        let extent = pts.iter().map(|p| (center - *p).length()).fold(0.0_f32, f32::max);
+                        painter.circle_stroke(center, extent + 3.0, sel_s);
+                    }
+                }
+                ObjType::RegularPolygon { n, radius } => {
+                    let r = radius * s;
+                    let nn = (*n).max(3) as usize;
+                    let pts: Vec<Pos2> = (0..nn).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / nn as f32 - std::f32::consts::FRAC_PI_2;
+                        proj.project([pos3[0] + r * angle.cos(), pos3[1] + r * angle.sin(), pos3[2]])
+                    }).collect();
+                    painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+                    if selected { painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel_s)); }
+                }
+                ObjType::Star { n, outer_radius, inner_radius } => {
+                    let ro = outer_radius * s;
+                    let ri = inner_radius * s;
+                    let nn = (*n).max(3) as usize;
+                    let pts: Vec<Pos2> = (0..nn*2).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / (nn * 2) as f32 - std::f32::consts::FRAC_PI_2;
+                        let r = if i % 2 == 0 { ro } else { ri };
+                        proj.project([pos3[0] + r * angle.cos(), pos3[1] + r * angle.sin(), pos3[2]])
+                    }).collect();
+                    painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+                    if selected { painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel_s)); }
+                }
+                ObjType::RoundedRectangle { width, height, .. } => {
+                    let hw = width * s / 2.0;
+                    let hh = height * s / 2.0;
+                    let corners: Vec<Pos2> = vec![
+                        [-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh],
+                    ].iter().map(|[dx, dy]| proj.project([pos3[0]+dx, pos3[1]+dy, pos3[2]])).collect();
+                    painter.add(egui::Shape::convex_polygon(corners.clone(), fill, stroke));
+                    if selected { painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s)); }
+                }
+                ObjType::Annulus { inner_radius, outer_radius } => {
+                    let n = 48;
+                    let pts_outer: Vec<Pos2> = (0..n).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                        proj.project([pos3[0] + outer_radius * s * angle.cos(), pos3[1] + outer_radius * s * angle.sin(), pos3[2]])
+                    }).collect();
+                    let pts_inner: Vec<Pos2> = (0..n).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                        proj.project([pos3[0] + inner_radius * s * angle.cos(), pos3[1] + inner_radius * s * angle.sin(), pos3[2]])
+                    }).collect();
+                    painter.add(egui::Shape::convex_polygon(pts_outer.clone(), fill, stroke));
+                    for i in 0..n { painter.line_segment([pts_inner[i], pts_inner[(i+1)%n]], stroke); }
+                    if selected {
+                        let extent = pts_outer.iter().map(|p| (center - *p).length()).fold(0.0_f32, f32::max);
+                        painter.circle_stroke(center, extent + 3.0, sel_s);
+                    }
+                }
+                ObjType::Sector { radius, start_angle, angle } => {
+                    let r = radius * s;
+                    let sa = start_angle.to_radians();
+                    let a = angle.to_radians();
+                    let n = 24;
+                    let mut pts = vec![center];
+                    for i in 0..=n {
+                        let t = sa + a * i as f32 / n as f32;
+                        pts.push(proj.project([pos3[0] + r * t.cos(), pos3[1] + r * t.sin(), pos3[2]]));
+                    }
+                    painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+                    if selected { painter.circle_stroke(center, r * z + 3.0, sel_s); }
+                }
+                ObjType::Arc { radius, start_angle, angle } => {
+                    let r = radius * s;
+                    let sa = start_angle.to_radians();
+                    let a = angle.to_radians();
+                    let n = 32;
+                    let pts: Vec<Pos2> = (0..=n).map(|i| {
+                        let t = sa + a * i as f32 / n as f32;
+                        proj.project([pos3[0] + r * t.cos(), pos3[1] + r * t.sin(), pos3[2]])
+                    }).collect();
+                    for i in 0..n as usize { painter.line_segment([pts[i], pts[i+1]], stroke); }
+                    if selected { painter.circle_stroke(center, r * z + 3.0, sel_s); }
+                }
+                ObjType::DashedLine { start, end, dash_length } => {
+                    let p1 = proj.project(*start);
+                    let p2 = proj.project(*end);
+                    let total = (p2 - p1).length();
+                    let dash_px = dash_length * z;
+                    let dir = (p2 - p1).normalized();
+                    let mut t = 0.0;
+                    let mut drawing = true;
+                    while t < total {
+                        let next_t = (t + dash_px).min(total);
+                        if drawing { painter.line_segment([p1 + dir * t, p1 + dir * next_t], stroke); }
+                        t = next_t;
+                        drawing = !drawing;
+                    }
+                    if selected { painter.circle_filled(p1, 4.0, sel_s.color); painter.circle_filled(p2, 4.0, sel_s.color); }
+                }
+                ObjType::DoubleArrow { start, end } => {
+                    let p1 = proj.project(*start);
+                    let p2 = proj.project(*end);
+                    painter.line_segment([p1, p2], stroke);
+                    let dir = (p2 - p1).normalized();
+                    let perp = Vec2::new(-dir.y, dir.x);
+                    let hs = 12.0_f32;
+                    painter.add(egui::Shape::convex_polygon(vec![p2, p2-dir*hs+perp*hs*0.4, p2-dir*hs-perp*hs*0.4], stroke_col, Stroke::NONE));
+                    painter.add(egui::Shape::convex_polygon(vec![p1, p1+dir*hs+perp*hs*0.4, p1+dir*hs-perp*hs*0.4], stroke_col, Stroke::NONE));
+                    if selected { painter.circle_stroke(center, (p2-p1).length()/2.0+3.0, sel_s); }
+                }
+                ObjType::Vector { direction } => {
+                    let p2 = proj.project([pos3[0]+direction[0], pos3[1]+direction[1], pos3[2]+direction[2]]);
+                    painter.line_segment([center, p2], stroke);
+                    let dir = (p2 - center).normalized();
+                    let perp = Vec2::new(-dir.y, dir.x);
+                    let hs = 12.0_f32;
+                    painter.add(egui::Shape::convex_polygon(vec![p2, p2-dir*hs+perp*hs*0.4, p2-dir*hs-perp*hs*0.4], stroke_col, Stroke::NONE));
+                    if selected { painter.circle_stroke(p2, hs+3.0, sel_s); }
+                }
+                ObjType::Arrow3D { start, end } => {
+                    let p1 = proj.project(*start);
+                    let p2 = proj.project(*end);
+                    painter.line_segment([p1, p2], stroke);
+                    let dir = (p2 - p1).normalized();
+                    let perp = Vec2::new(-dir.y, dir.x);
+                    let hs = 14.0_f32;
+                    painter.add(egui::Shape::convex_polygon(vec![p2, p2-dir*hs+perp*hs*0.4, p2-dir*hs-perp*hs*0.4], stroke_col, Stroke::NONE));
+                    if selected { painter.circle_stroke(p2, hs+3.0, sel_s); }
+                }
+                ObjType::Line3D { start, end } => {
+                    let p1 = proj.project(*start);
+                    let p2 = proj.project(*end);
+                    painter.line_segment([p1, p2], stroke);
+                    if selected { painter.circle_filled(p1, 4.0, sel_s.color); painter.circle_filled(p2, 4.0, sel_s.color); }
+                }
+                ObjType::Cone { radius, height } => {
+                    let tip = proj.project([pos3[0], pos3[1], pos3[2] + height * s]);
+                    let n = 24;
+                    let base_pts: Vec<Pos2> = (0..n).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                        proj.project([pos3[0] + radius * s * angle.cos(), pos3[1] + radius * s * angle.sin(), pos3[2]])
+                    }).collect();
+                    // Draw base circle
+                    for i in 0..n { painter.line_segment([base_pts[i], base_pts[(i+1)%n]], stroke); }
+                    // Draw lines from tip to base
+                    for i in (0..n).step_by(3) { painter.line_segment([tip, base_pts[i]], stroke); }
+                    if selected { painter.circle_stroke(center, approx_r(obj) * z + 3.0, sel_s); }
+                }
+                ObjType::Torus { major_radius, minor_radius } => {
+                    let n = 48;
+                    // Outer ring
+                    let outer: Vec<Pos2> = (0..n).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                        let r = (major_radius + minor_radius) * s;
+                        proj.project([pos3[0] + r * angle.cos(), pos3[1] + r * angle.sin(), pos3[2]])
+                    }).collect();
+                    let inner: Vec<Pos2> = (0..n).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                        let r = (major_radius - minor_radius) * s;
+                        proj.project([pos3[0] + r * angle.cos(), pos3[1] + r * angle.sin(), pos3[2]])
+                    }).collect();
+                    painter.add(egui::Shape::convex_polygon(outer.clone(), fill, stroke));
+                    for i in 0..n { painter.line_segment([inner[i], inner[(i+1)%n]], stroke); }
+                    if selected { let ext = outer.iter().map(|p| (center-*p).length()).fold(0.0_f32, f32::max); painter.circle_stroke(center, ext+3.0, sel_s); }
+                }
+                ObjType::Prism { width, height, depth } => {
+                    let hw = width * s / 2.0;
+                    let hh = height * s / 2.0;
+                    let hd = depth * s / 2.0;
+                    let corners_3d: Vec<[f32;3]> = vec![
+                        [-hw,-hh,-hd], [ hw,-hh,-hd], [ hw, hh,-hd], [-hw, hh,-hd],
+                        [-hw,-hh, hd], [ hw,-hh, hd], [ hw, hh, hd], [-hw, hh, hd],
+                    ].iter().map(|[dx,dy,dz]| [pos3[0]+dx, pos3[1]+dy, pos3[2]+dz]).collect();
+                    let c2d: Vec<Pos2> = corners_3d.iter().map(|p| proj.project(*p)).collect();
+                    let edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)];
+                    for (a,b) in edges { painter.line_segment([c2d[a], c2d[b]], stroke); }
+                    if selected { painter.circle_stroke(center, approx_r(obj) * z + 3.0, sel_s); }
+                }
+                ObjType::DecimalNumber { number, num_decimal_places } => {
+                    let text = format!("{:.1$}", number, *num_decimal_places as usize);
+                    let text_w = 0.3 * s * text.len() as f32;
+                    draw_text_on_plane(painter, proj, &text, pos3, text_w, s, stroke_col);
+                    if selected { painter.circle_stroke(center, text_w * z / 2.0 + 3.0, sel_s); }
+                }
+                ObjType::Integer { number } => {
+                    let text = format!("{}", number);
+                    let text_w = 0.3 * s * text.len() as f32;
+                    draw_text_on_plane(painter, proj, &text, pos3, text_w, s, stroke_col);
+                    if selected { painter.circle_stroke(center, text_w * z / 2.0 + 3.0, sel_s); }
+                }
+                // Generic fallback for anything else
+                _ => {
+                    let r = approx_r(obj) * s * z;
+                    painter.circle(center, r.max(4.0), fill, stroke);
+                    if selected { painter.circle_stroke(center, r+3.0, sel_s); }
+                }
+            }
         }
     }
 
@@ -660,6 +861,58 @@ fn draw_obj_3d(
             egui::FontId::proportional(11.0),
             Color32::from_rgb(255, 220, 50),
         );
+    }
+}
+
+/// Render text content as per-character glyphs positioned along the XY plane
+/// so that the text rotates with the 3D view instead of staying billboard.
+fn draw_text_on_plane(
+    painter: &Painter,
+    proj: &Projection3D,
+    content: &str,
+    pos3: [f32; 3],
+    text_w: f32,
+    _scale: f32,
+    color: Color32,
+) {
+    let n = content.chars().count().max(1);
+    let char_w = text_w / n as f32;
+    let start_x = pos3[0] - text_w / 2.0 + char_w / 2.0;
+
+    // Compute projected character width on screen to derive font size
+    let p_left = proj.project([pos3[0] - text_w / 2.0, pos3[1], pos3[2]]);
+    let p_right = proj.project([pos3[0] + text_w / 2.0, pos3[1], pos3[2]]);
+    let proj_w = (p_right - p_left).length();
+    let fs = (proj_w / n as f32 * 1.6).clamp(6.0, 60.0);
+
+    // Compute the screen-space angle of the text baseline
+    let dir = p_right - p_left;
+    let angle = dir.y.atan2(dir.x);
+
+    // Use galley with rotation to render each character along the plane direction
+    for (i, ch) in content.chars().enumerate() {
+        let cx = start_x + i as f32 * char_w;
+        let sp = proj.project([cx, pos3[1], pos3[2]]);
+
+        let galley = painter.layout_no_wrap(
+            ch.to_string(),
+            egui::FontId::proportional(fs),
+            color,
+        );
+        let gw = galley.size().x;
+        let gh = galley.size().y;
+
+        // Translate so the glyph center is at `sp`, then rotate by `angle`
+        let shape = egui::Shape::Text(egui::epaint::TextShape {
+            pos: egui::pos2(sp.x - gw / 2.0, sp.y - gh / 2.0),
+            galley,
+            underline: Stroke::NONE,
+            fallback_color: color,
+            override_text_color: Some(color),
+            opacity_factor: 1.0,
+            angle,
+        });
+        painter.add(shape);
     }
 }
 
@@ -816,14 +1069,364 @@ fn draw_obj_2d(
                 }
             }
         }
-        // Fallback for new types: draw a labeled placeholder circle
-        _ => {
-            let r = 20.0 * s * z / 60.0;
-            let r = r.max(8.0);
-            painter.circle(pos, r, fill, stroke);
-            painter.text(pos, egui::Align2::CENTER_CENTER, obj.object_type.icon(),
-                egui::FontId::proportional(r * 0.8), stroke_col);
+        ObjType::Ellipse { width, height } => {
+            let n = 48;
+            let hw = width * s * z / 2.0;
+            let hh = height * s * z / 2.0;
+            let pts: Vec<Pos2> = (0..n).map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                Pos2::new(pos.x + hw * angle.cos(), pos.y - hh * angle.sin())
+            }).collect();
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+            if selected {
+                let extent = hw.max(hh);
+                painter.circle_stroke(pos, extent + 3.0, sel);
+            }
+        }
+        ObjType::Arc { radius, start_angle, angle } => {
+            let r = radius * s * z;
+            let sa = start_angle.to_radians();
+            let a = angle.to_radians();
+            let n = 32;
+            let pts: Vec<Pos2> = (0..=n).map(|i| {
+                let t = sa + a * i as f32 / n as f32;
+                Pos2::new(pos.x + r * t.cos(), pos.y - r * t.sin())
+            }).collect();
+            for i in 0..n as usize {
+                painter.line_segment([pts[i], pts[i+1]], stroke);
+            }
             if selected { painter.circle_stroke(pos, r + 3.0, sel); }
+        }
+        ObjType::ArcBetweenPoints { start, end, angle: _ } => {
+            let p1 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let p2 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            // Draw as a simple curved arc between the two points
+            let mid = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
+            let perp = Vec2::new(-(p2.y - p1.y), p2.x - p1.x).normalized();
+            let bulge = (p2 - p1).length() * 0.3;
+            let control = mid + perp * bulge;
+            let n = 24;
+            let pts: Vec<Pos2> = (0..=n).map(|i| {
+                let t = i as f32 / n as f32;
+                let mt = 1.0 - t;
+                Pos2::new(
+                    mt*mt*p1.x + 2.0*mt*t*control.x + t*t*p2.x,
+                    mt*mt*p1.y + 2.0*mt*t*control.y + t*t*p2.y,
+                )
+            }).collect();
+            for i in 0..n as usize {
+                painter.line_segment([pts[i], pts[i+1]], stroke);
+            }
+            if selected {
+                painter.circle_filled(p1, 4.0, sel.color);
+                painter.circle_filled(p2, 4.0, sel.color);
+            }
+        }
+        ObjType::Annulus { inner_radius, outer_radius } => {
+            let ro = outer_radius * s * z;
+            let ri = inner_radius * s * z;
+            painter.circle(pos, ro, fill, stroke);
+            // Punch out the inner circle with background color
+            painter.circle_filled(pos, ri, Color32::from_rgb(15, 15, 18));
+            painter.circle_stroke(pos, ri, stroke);
+            if selected { painter.circle_stroke(pos, ro + 3.0, sel); }
+        }
+        ObjType::Sector { radius, start_angle, angle } => {
+            let r = radius * s * z;
+            let sa = start_angle.to_radians();
+            let a = angle.to_radians();
+            let n = 24;
+            let mut pts = vec![pos];
+            for i in 0..=n {
+                let t = sa + a * i as f32 / n as f32;
+                pts.push(Pos2::new(pos.x + r * t.cos(), pos.y - r * t.sin()));
+            }
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+            if selected { painter.circle_stroke(pos, r + 3.0, sel); }
+        }
+        ObjType::RegularPolygon { n, radius } => {
+            let r = radius * s * z;
+            let nn = (*n).max(3) as usize;
+            let pts: Vec<Pos2> = (0..nn).map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / nn as f32 - std::f32::consts::FRAC_PI_2;
+                Pos2::new(pos.x + r * angle.cos(), pos.y + r * angle.sin())
+            }).collect();
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+            if selected { painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel)); }
+        }
+        ObjType::Star { n, outer_radius, inner_radius } => {
+            let ro = outer_radius * s * z;
+            let ri = inner_radius * s * z;
+            let nn = (*n).max(3) as usize;
+            let pts: Vec<Pos2> = (0..nn*2).map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / (nn * 2) as f32 - std::f32::consts::FRAC_PI_2;
+                let r = if i % 2 == 0 { ro } else { ri };
+                Pos2::new(pos.x + r * angle.cos(), pos.y + r * angle.sin())
+            }).collect();
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+            if selected { painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel)); }
+        }
+        ObjType::RoundedRectangle { width, height, corner_radius } => {
+            let r = Rect::from_center_size(pos, Vec2::new(width*s*z, height*s*z));
+            let cr = corner_radius * s * z;
+            painter.rect(r, cr, fill, stroke);
+            if selected { painter.rect_stroke(r.expand(3.0), cr, sel); }
+        }
+        ObjType::DashedLine { start, end, dash_length } => {
+            let p1 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let p2 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            let total = (p2 - p1).length();
+            let dash_px = dash_length * z;
+            let dir = (p2 - p1).normalized();
+            let mut t = 0.0;
+            let mut drawing = true;
+            while t < total {
+                let next_t = (t + dash_px).min(total);
+                if drawing {
+                    let a = p1 + dir * t;
+                    let b = p1 + dir * next_t;
+                    painter.line_segment([a, b], stroke);
+                }
+                t = next_t;
+                drawing = !drawing;
+            }
+            if selected {
+                painter.circle_filled(p1, 4.0, sel.color);
+                painter.circle_filled(p2, 4.0, sel.color);
+            }
+        }
+        ObjType::DoubleArrow { start, end } => {
+            let p1 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let p2 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            painter.line_segment([p1, p2], stroke);
+            let dir = (p2 - p1).normalized();
+            let perp = Vec2::new(-dir.y, dir.x);
+            let hs = 12.0_f32;
+            // Arrowhead at p2
+            painter.add(egui::Shape::convex_polygon(
+                vec![p2, p2 - dir*hs + perp*hs*0.4, p2 - dir*hs - perp*hs*0.4],
+                stroke_col, Stroke::NONE));
+            // Arrowhead at p1
+            painter.add(egui::Shape::convex_polygon(
+                vec![p1, p1 + dir*hs + perp*hs*0.4, p1 + dir*hs - perp*hs*0.4],
+                stroke_col, Stroke::NONE));
+            if selected { painter.circle_stroke(pos, (p2-p1).length()/2.0+3.0, sel); }
+        }
+        ObjType::Vector { direction } => {
+            let p1 = pos;
+            let p2 = m2s(egui::pos2(ds.position[0]+direction[0], ds.position[1]+direction[1]), center, zoom);
+            painter.line_segment([p1, p2], stroke);
+            let dir = (p2 - p1).normalized();
+            let perp = Vec2::new(-dir.y, dir.x);
+            let hs = 12.0_f32;
+            painter.add(egui::Shape::convex_polygon(
+                vec![p2, p2 - dir*hs + perp*hs*0.4, p2 - dir*hs - perp*hs*0.4],
+                stroke_col, Stroke::NONE));
+            if selected { painter.circle_stroke(p2, hs+3.0, sel); }
+        }
+        ObjType::Brace { direction: _, length } => {
+            let l = length * s * z;
+            let p1 = Pos2::new(pos.x - l/2.0, pos.y);
+            let p2 = Pos2::new(pos.x + l/2.0, pos.y);
+            let mid = Pos2::new(pos.x, pos.y - l * 0.15);
+            // Simple curly brace approximation
+            painter.line_segment([p1, Pos2::new(p1.x + l*0.1, mid.y)], stroke);
+            painter.line_segment([Pos2::new(p1.x + l*0.1, mid.y), mid], stroke);
+            painter.line_segment([mid, Pos2::new(p2.x - l*0.1, mid.y)], stroke);
+            painter.line_segment([Pos2::new(p2.x - l*0.1, mid.y), p2], stroke);
+            if selected { painter.circle_stroke(pos, l/2.0 + 3.0, sel); }
+        }
+        ObjType::BraceBetweenPoints { start, end } => {
+            let p1 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let p2 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            let mid = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
+            let perp = Vec2::new(-(p2.y - p1.y), p2.x - p1.x).normalized() * 10.0;
+            painter.line_segment([p1, p1 + perp], stroke);
+            painter.line_segment([p1 + perp, mid + perp * 2.0], stroke);
+            painter.line_segment([mid + perp * 2.0, p2 + perp], stroke);
+            painter.line_segment([p2 + perp, p2], stroke);
+            if selected {
+                painter.circle_filled(p1, 4.0, sel.color);
+                painter.circle_filled(p2, 4.0, sel.color);
+            }
+        }
+        ObjType::Angle { radius, start_angle, angle } => {
+            let r = radius * s * z;
+            let sa = start_angle.to_radians();
+            let a = angle.to_radians();
+            let n = 16;
+            let pts: Vec<Pos2> = (0..=n).map(|i| {
+                let t = sa + a * i as f32 / n as f32;
+                Pos2::new(pos.x + r * t.cos(), pos.y - r * t.sin())
+            }).collect();
+            for i in 0..n as usize {
+                painter.line_segment([pts[i], pts[i+1]], stroke);
+            }
+            // Draw the two angle legs
+            let leg_len = r * 1.5;
+            painter.line_segment([pos, Pos2::new(pos.x + leg_len * sa.cos(), pos.y - leg_len * sa.sin())],
+                Stroke::new(0.8, stroke_col));
+            painter.line_segment([pos, Pos2::new(pos.x + leg_len * (sa+a).cos(), pos.y - leg_len * (sa+a).sin())],
+                Stroke::new(0.8, stroke_col));
+            if selected { painter.circle_stroke(pos, r + 3.0, sel); }
+        }
+        ObjType::RightAngle { size } => {
+            let sz = size * s * z;
+            let p1 = Pos2::new(pos.x + sz, pos.y);
+            let p2 = Pos2::new(pos.x + sz, pos.y - sz);
+            let p3 = Pos2::new(pos.x, pos.y - sz);
+            painter.line_segment([pos, p1], Stroke::new(0.8, stroke_col));
+            painter.line_segment([pos, p3], Stroke::new(0.8, stroke_col));
+            painter.line_segment([p1, p2], stroke);
+            painter.line_segment([p2, p3], stroke);
+            if selected { painter.circle_stroke(pos, sz + 3.0, sel); }
+        }
+        ObjType::NumberLine { x_min, x_max, step } => {
+            let left = m2s(egui::pos2(ds.position[0] + x_min, ds.position[1]), center, zoom);
+            let right = m2s(egui::pos2(ds.position[0] + x_max, ds.position[1]), center, zoom);
+            painter.line_segment([left, right], stroke);
+            // Tick marks
+            let mut x = *x_min;
+            while x <= *x_max + 0.001 {
+                let px = m2s(egui::pos2(ds.position[0] + x, ds.position[1]), center, zoom);
+                painter.line_segment(
+                    [Pos2::new(px.x, px.y - 5.0), Pos2::new(px.x, px.y + 5.0)],
+                    stroke);
+                x += step;
+            }
+            if selected {
+                painter.circle_filled(left, 4.0, sel.color);
+                painter.circle_filled(right, 4.0, sel.color);
+            }
+        }
+        ObjType::BarChart { values, bar_width } => {
+            if !values.is_empty() {
+                let bw = bar_width * s * z;
+                let gap = bw * 0.2;
+                let total_w = values.len() as f32 * (bw + gap) - gap;
+                let start_x = pos.x - total_w / 2.0;
+                for (i, val) in values.iter().enumerate() {
+                    let bx = start_x + i as f32 * (bw + gap);
+                    let bh = val * s * z;
+                    let bar = Rect::from_min_size(
+                        Pos2::new(bx, pos.y - bh),
+                        Vec2::new(bw, bh),
+                    );
+                    painter.rect(bar, 0.0, fill, stroke);
+                }
+                if selected {
+                    let max_h = values.iter().fold(0.0_f32, |a, &b| a.max(b)) * s * z;
+                    let r = Rect::from_center_size(pos, Vec2::new(total_w + 6.0, max_h + 6.0));
+                    painter.rect_stroke(r, 0.0, sel);
+                }
+            }
+        }
+        ObjType::DecimalNumber { number, num_decimal_places } => {
+            let text = format!("{:.1$}", number, *num_decimal_places as usize);
+            let fs = (18.0 * s * z / 60.0 * 14.0).clamp(8.0, 48.0);
+            painter.text(pos, egui::Align2::CENTER_CENTER, &text,
+                egui::FontId::monospace(fs), stroke_col);
+            if selected {
+                let tr = Rect::from_center_size(pos, Vec2::new(fs * text.len() as f32 * 0.6, fs * 1.3));
+                painter.rect_stroke(tr.expand(4.0), 3.0, sel);
+            }
+        }
+        ObjType::Integer { number } => {
+            let text = format!("{}", number);
+            let fs = (18.0 * s * z / 60.0 * 14.0).clamp(8.0, 48.0);
+            painter.text(pos, egui::Align2::CENTER_CENTER, &text,
+                egui::FontId::monospace(fs), stroke_col);
+            if selected {
+                let tr = Rect::from_center_size(pos, Vec2::new(fs * text.len() as f32 * 0.6, fs * 1.3));
+                painter.rect_stroke(tr.expand(4.0), 3.0, sel);
+            }
+        }
+        ObjType::Dot3D => {
+            let r = (6.0*s*z/60.0*8.0).max(4.0);
+            painter.circle_filled(pos, r, stroke_col);
+            // Highlight to suggest 3D
+            painter.circle_filled(pos + Vec2::new(-r*0.2, -r*0.2), r*0.25,
+                Color32::from_rgba_premultiplied(255,255,255,50));
+            if selected { painter.circle_stroke(pos, r+4.0, sel); }
+        }
+        ObjType::Cone { radius, height } => {
+            let r = radius * s * z;
+            let h = height * s * z;
+            let pts = vec![
+                Pos2::new(pos.x, pos.y - h/2.0),       // tip
+                Pos2::new(pos.x - r, pos.y + h/2.0),   // base left
+                Pos2::new(pos.x + r, pos.y + h/2.0),   // base right
+            ];
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+            if selected { painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel)); }
+        }
+        ObjType::Torus { major_radius, minor_radius } => {
+            let mr = major_radius * s * z;
+            let mnr = minor_radius * s * z;
+            // Draw outer and inner ellipses
+            painter.circle(pos, mr + mnr, fill, stroke);
+            painter.circle_stroke(pos, (mr - mnr).max(1.0),
+                Stroke::new(1.0, stroke_col));
+            if selected { painter.circle_stroke(pos, mr + mnr + 3.0, sel); }
+        }
+        ObjType::Prism { width, height, depth } => {
+            let hw = width * s * z / 2.0;
+            let hh = height * s * z / 2.0;
+            let d = depth * s * z * 0.3; // perspective offset
+            let front = Rect::from_center_size(pos, Vec2::new(hw*2.0, hh*2.0));
+            painter.rect(front, 0.0, fill, stroke);
+            let back = Rect::from_center_size(pos + Vec2::new(d, -d), Vec2::new(hw*2.0, hh*2.0));
+            painter.rect(back, 0.0, Color32::from_rgba_premultiplied(200,200,200,20),
+                Stroke::new(0.8, stroke_col));
+            // Connect corners
+            for (fp, bp) in [(front.left_top(), back.left_top()),
+                             (front.right_top(), back.right_top()),
+                             (front.right_bottom(), back.right_bottom()),
+                             (front.left_bottom(), back.left_bottom())] {
+                painter.line_segment([fp, bp], Stroke::new(0.8, stroke_col));
+            }
+            if selected { painter.rect_stroke(front.expand(3.0), 0.0, sel); }
+        }
+        ObjType::Arrow3D { start, end } => {
+            let p1 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let p2 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            painter.line_segment([p1, p2], stroke);
+            let dir = (p2 - p1).normalized();
+            let perp = Vec2::new(-dir.y, dir.x);
+            let hs = 14.0_f32;
+            painter.add(egui::Shape::convex_polygon(
+                vec![p2, p2 - dir*hs + perp*hs*0.4, p2 - dir*hs - perp*hs*0.4],
+                stroke_col, Stroke::NONE));
+            if selected { painter.circle_stroke(p2, hs+3.0, sel); }
+        }
+        ObjType::Line3D { start, end } => {
+            let p1 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let p2 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            painter.line_segment([p1, p2], stroke);
+            if selected {
+                painter.circle_filled(p1, 4.0, sel.color);
+                painter.circle_filled(p2, 4.0, sel.color);
+            }
+        }
+        ObjType::Surface => {
+            // Wireframe grid for surface preview
+            let half = 2.0 * s * z;
+            let r = Rect::from_center_size(pos, Vec2::splat(half*2.0));
+            painter.rect(r, 0.0, Color32::from_rgba_premultiplied(
+                (c[0]*255.0) as u8, (c[1]*255.0) as u8, (c[2]*255.0) as u8, 30),
+                stroke);
+            for i in -3..=3_i32 {
+                let off = i as f32 * z * s * 2.0 / 3.0;
+                painter.line_segment(
+                    [Pos2::new(pos.x + off, r.top()), Pos2::new(pos.x + off, r.bottom())],
+                    Stroke::new(0.4, Color32::from_rgba_premultiplied(
+                        (c[0]*255.0) as u8, (c[1]*255.0) as u8, (c[2]*255.0) as u8, 60)));
+                painter.line_segment(
+                    [Pos2::new(r.left(), pos.y + off), Pos2::new(r.right(), pos.y + off)],
+                    Stroke::new(0.4, Color32::from_rgba_premultiplied(
+                        (c[0]*255.0) as u8, (c[1]*255.0) as u8, (c[2]*255.0) as u8, 60)));
+            }
+            if selected { painter.rect_stroke(r.expand(3.0), 0.0, sel); }
         }
     }
 
@@ -1094,6 +1697,18 @@ fn approx_r(obj: &ManimObject) -> f32 {
         ObjType::Cylinder { radius, .. }     => *radius,
         ObjType::Text { font_size, .. }      => font_size / FONT_SIZE_SCALE,
         ObjType::NumberPlane | ObjType::Axes => 5.0,
+        ObjType::Ellipse { width, height }   => width.max(*height) * 0.5,
+        ObjType::Arc { radius, .. }          => *radius,
+        ObjType::Annulus { outer_radius, .. } => *outer_radius,
+        ObjType::Sector { radius, .. }       => *radius,
+        ObjType::RegularPolygon { radius, .. } => *radius,
+        ObjType::Star { outer_radius, .. }   => *outer_radius,
+        ObjType::RoundedRectangle { width, height, .. } => width.max(*height) * 0.5,
+        ObjType::Cone { radius, height }     => radius.max(*height * 0.5),
+        ObjType::Torus { major_radius, minor_radius } => major_radius + minor_radius,
+        ObjType::Prism { width, height, .. } => width.max(*height) * 0.5,
+        ObjType::NumberLine { x_min, x_max, .. } => (x_max - x_min) * 0.5,
+        ObjType::BarChart { values, .. }     => values.len() as f32 * 0.5,
         _ => 0.5,
     }
 }
