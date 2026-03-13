@@ -55,7 +55,7 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                         app.scene.camera_phi   = app.cam3d.phi;
                         app.scene.camera_theta = app.cam3d.theta;
                     }
-                    ctx.set_cursor_icon(if ctrl_held { egui::CursorIcon::ResizeAll } else { egui::CursorIcon::Crosshair });
+                    ctx.set_cursor_icon(if ctrl_held { egui::CursorIcon::Move } else { egui::CursorIcon::Crosshair });
                 } else {
                     // 2D: middle drag → pan
                     app.vp_pan += mouse_delta;
