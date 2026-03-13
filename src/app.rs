@@ -518,6 +518,19 @@ impl eframe::App for ManimStudio {
             self.is_playing = false;
         }
 
+        // Arrow keys = move timeline playhead
+        if !in_mode {
+            let step = if ctrl { 1.0 } else { 0.1 }; // Ctrl = larger step
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+                self.scene.timeline.current_time = (self.scene.timeline.current_time + step)
+                    .min(self.scene.timeline.duration);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+                self.scene.timeline.current_time = (self.scene.timeline.current_time - step)
+                    .max(0.0);
+            }
+        }
+
         // ── Layout ───────────────────────────────────────────────────────────
         crate::ui::toolbar::show(self, ctx);
         crate::ui::timeline::show(self, ctx);

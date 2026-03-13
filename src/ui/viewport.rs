@@ -135,15 +135,15 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
             let dur = app.scene.timeline.duration;
             let hint = if in_mode {
                 match app.interaction_mode {
-                    InteractionMode::Grab   => "[G: 移動 / X,Y,Z: 軸固定 / LMB,Enter: 確定 / RMB,Esc: キャンセル]",
-                    InteractionMode::Scale  => "[S: 拡縮 / X,Y,Z: 軸固定 / LMB,Enter: 確定 / RMB,Esc: キャンセル]",
-                    InteractionMode::Rotate => "[R: 回転 / LMB,Enter: 確定 / RMB,Esc: キャンセル]",
+                    InteractionMode::Grab   => "[G: Grab / X,Y,Z: Axis / LMB,Enter: Confirm / RMB,Esc: Cancel]",
+                    InteractionMode::Scale  => "[S: Scale / X,Y,Z: Axis / LMB,Enter: Confirm / RMB,Esc: Cancel]",
+                    InteractionMode::Rotate => "[R: Rotate / LMB,Enter: Confirm / RMB,Esc: Cancel]",
                     InteractionMode::Normal => "",
                 }
             } else if is_3d {
-                "[G: 移動 / S: 拡縮 / R: 回転 / 1,3,7,0: ビュー / 中: 回転 / Ctrl+中: 移動]"
+                "[G: Grab / S: Scale / R: Rotate / 1,3,7,0: View / Mid: Orbit / Ctrl+Mid: Pan]"
             } else {
-                "[G: 移動 / S: 拡縮 / R: 回転 / 中: pan / スクロール: ズーム]"
+                "[G: Grab / S: Scale / R: Rotate / Mid: Pan / Scroll: Zoom]"
             };
             painter.text(
                 avail.left_top() + Vec2::new(8.0, 8.0),
@@ -368,7 +368,8 @@ fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn draw_3d_grid(painter: &Painter, proj: &Projection3D) {
-    let range = 6;
+    // Extend grid to cover the visible area; compute range from zoom level
+    let range = ((20.0 * 60.0 / proj.zoom) as i32).clamp(10, 100);
     let grid_col  = Color32::from_rgba_premultiplied(50, 55, 65, 120);
     let major_col = Color32::from_rgba_premultiplied(65, 70, 85, 160);
 
@@ -452,7 +453,7 @@ fn draw_obj_3d(
     let z = proj.zoom;
 
     match &obj.object_type {
-        ObjType::Sphere { radius } | ObjType::Circle { radius: radius } => {
+        ObjType::Sphere { radius } => {
             let r = radius * s * z;
             painter.circle(center, r, fill, stroke);
             // Highlight rim to suggest sphere
@@ -460,7 +461,26 @@ fn draw_obj_3d(
                 Color32::from_rgba_premultiplied(255,255,255,40));
             if selected { painter.circle_stroke(center, r+3.0, sel_s); }
         }
-        ObjType::Cube { side_length } | ObjType::Square { side_length: side_length } => {
+        ObjType::Circle { radius } => {
+            // Draw 2D circle flat in XY plane (as a projected ellipse)
+            let r = radius * s;
+            let n = 48;
+            let pts: Vec<Pos2> = (0..n).map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / n as f32;
+                let lx = r * angle.cos();
+                let ly = r * angle.sin();
+                proj.project([pos3[0] + lx, pos3[1] + ly, pos3[2]])
+            }).collect();
+            for i in 0..n {
+                painter.line_segment([pts[i], pts[(i+1)%n]], stroke);
+            }
+            // Fill approximation
+            if pts.len() >= 3 {
+                painter.add(egui::Shape::convex_polygon(pts.clone(), fill, Stroke::NONE));
+            }
+            if selected { painter.circle_stroke(center, radius * s * z + 3.0, sel_s); }
+        }
+        ObjType::Cube { side_length } => {
             let half = side_length * s / 2.0;
             // Project 8 cube corners
             let corners_3d: Vec<[f32;3]> = vec![
@@ -476,6 +496,48 @@ fn draw_obj_3d(
                 painter.line_segment([c2d[a], c2d[b]], stroke);
             }
             if selected { painter.circle_stroke(center, half*z+3.0, sel_s); }
+        }
+        ObjType::Square { side_length } => {
+            // Draw 2D square flat in XY plane
+            let half = side_length * s / 2.0;
+            let corners: Vec<Pos2> = vec![
+                [-half, -half], [half, -half], [half, half], [-half, half],
+            ].iter().map(|[dx, dy]| {
+                proj.project([pos3[0] + dx, pos3[1] + dy, pos3[2]])
+            }).collect();
+            painter.add(egui::Shape::convex_polygon(corners.clone(), fill, stroke));
+            if selected {
+                painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
+            }
+        }
+        ObjType::Rectangle { width, height } => {
+            // Draw 2D rectangle flat in XY plane
+            let hw = width * s / 2.0;
+            let hh = height * s / 2.0;
+            let corners: Vec<Pos2> = vec![
+                [-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh],
+            ].iter().map(|[dx, dy]| {
+                proj.project([pos3[0] + dx, pos3[1] + dy, pos3[2]])
+            }).collect();
+            painter.add(egui::Shape::convex_polygon(corners.clone(), fill, stroke));
+            if selected {
+                painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
+            }
+        }
+        ObjType::Triangle { side_length } => {
+            // Draw 2D equilateral triangle flat in XY plane
+            let r = side_length * s / 2.0;
+            let pts: Vec<Pos2> = vec![
+                [0.0, r],
+                [-r * 0.866, -r * 0.5],
+                [r * 0.866, -r * 0.5],
+            ].iter().map(|[dx, dy]| {
+                proj.project([pos3[0] + dx, pos3[1] + dy, pos3[2]])
+            }).collect();
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+            if selected {
+                painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel_s));
+            }
         }
         ObjType::Cylinder { radius, height } => {
             // Top and bottom circles approximated as ellipses (just draw projected circles)
@@ -520,23 +582,58 @@ fn draw_obj_3d(
             let p2 = proj.project([end[0], end[1], end[2]]);
             painter.line_segment([p1, p2], stroke);
         }
-        // Text / MathTex: just draw at projected position
+        // Text / MathTex: render as flat text plane in XY, oriented in 3D space
         ObjType::Text { content, font_size } => {
+            // Approximate text extents in Manim units
+            let char_w = font_size * s / 48.0 * 0.5;
+            let text_w = char_w * content.len() as f32;
+            let text_h = font_size * s / 48.0 * 0.8;
+            let hw = text_w / 2.0;
+            let hh = text_h / 2.0;
+            // Project four corners of the text plane (lying in XY at the object's Z)
+            let corners: Vec<Pos2> = vec![
+                [-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh],
+            ].iter().map(|[dx, dy]| {
+                proj.project([pos3[0] + dx, pos3[1] + dy, pos3[2]])
+            }).collect();
+            // Draw text background plane
+            painter.add(egui::Shape::convex_polygon(
+                corners.clone(),
+                Color32::from_rgba_premultiplied(0, 0, 0, 30),
+                Stroke::new(0.5, stroke_col),
+            ));
+            // Draw the text at the projected center (readable but bounded by the plane)
             let fs = (font_size * s * z / 48.0 * 14.0).clamp(8.0, 60.0);
             painter.text(center, egui::Align2::CENTER_CENTER, content,
                 egui::FontId::proportional(fs), stroke_col);
             if selected {
-                let tr = Rect::from_center_size(center,
-                    Vec2::new(fs * content.len() as f32 * 0.55, fs * 1.3));
-                painter.rect_stroke(tr.expand(4.0), 3.0, sel_s);
+                painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
             }
         }
         ObjType::MathTex { content } => {
+            let char_w = 0.3 * s;
+            let text_w = char_w * content.len() as f32;
+            let text_h = 0.5 * s;
+            let hw = text_w / 2.0;
+            let hh = text_h / 2.0;
+            let corners: Vec<Pos2> = vec![
+                [-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh],
+            ].iter().map(|[dx, dy]| {
+                proj.project([pos3[0] + dx, pos3[1] + dy, pos3[2]])
+            }).collect();
+            painter.add(egui::Shape::convex_polygon(
+                corners.clone(),
+                Color32::from_rgba_premultiplied(0, 0, 0, 30),
+                Stroke::new(0.5, stroke_col),
+            ));
             let fs = (14.0 * s * z / 60.0).clamp(8.0, 48.0);
             painter.text(center, egui::Align2::CENTER_CENTER, content,
                 egui::FontId::monospace(fs), stroke_col);
+            if selected {
+                painter.add(egui::Shape::convex_polygon(corners, Color32::TRANSPARENT, sel_s));
+            }
         }
-        // Fallback for 2D shapes — draw as flat in XY plane
+        // Fallback — draw as a small dot at projected position
         _ => {
             let r = approx_r(obj) * s * z;
             painter.circle(center, r.max(4.0), fill, stroke);
@@ -822,17 +919,17 @@ fn apply_rotate(
 /// Draw the interaction mode overlay (mode indicator, axis guide line).
 fn draw_mode_overlay(app: &ManimStudio, painter: &Painter, avail: Rect, _is_3d: bool) {
     let mode_label = match app.interaction_mode {
-        InteractionMode::Grab   => "G: Grab (移動)",
-        InteractionMode::Scale  => "S: Scale (拡縮)",
-        InteractionMode::Rotate => "R: Rotate (回転)",
+        InteractionMode::Grab   => "G: Grab",
+        InteractionMode::Scale  => "S: Scale",
+        InteractionMode::Rotate => "R: Rotate",
         InteractionMode::Normal => return,
     };
 
     let axis_label = match app.axis_constraint {
         AxisConstraint::None => "",
-        AxisConstraint::X    => " → X軸",
-        AxisConstraint::Y    => " → Y軸",
-        AxisConstraint::Z    => " → Z軸",
+        AxisConstraint::X    => " > X",
+        AxisConstraint::Y    => " > Y",
+        AxisConstraint::Z    => " > Z",
     };
 
     let axis_color = match app.axis_constraint {
