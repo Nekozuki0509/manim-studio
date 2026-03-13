@@ -1,4 +1,4 @@
-use crate::app::ManimStudio;
+use crate::app::{AxisConstraint, InteractionMode, ManimStudio};
 use crate::scene::{compute_display_state, DisplayState, ManimObject, ObjType};
 use egui::{Color32, Context, Painter, Pos2, Rect, Stroke, Vec2};
 
@@ -24,6 +24,7 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
 
             let current_t = app.scene.timeline.current_time;
             let is_3d = app.scene.is_3d;
+            let in_mode = app.interaction_mode != InteractionMode::Normal;
 
             // ── Background ────────────────────────────────────────────────────
             let bg = app.scene.bg_color;
@@ -38,7 +39,7 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
             let ctrl_held   = ctx.input(|i| i.modifiers.ctrl);
             let mouse_delta = ctx.input(|i| i.pointer.delta());
 
-            if middle_down && response.hovered() {
+            if middle_down && response.hovered() && !in_mode {
                 if is_3d {
                     if ctrl_held {
                         // Ctrl + middle drag → pan in camera space
@@ -64,7 +65,7 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
             }
 
             // ── Scroll to zoom ────────────────────────────────────────────────
-            if response.hovered() {
+            if response.hovered() && !in_mode {
                 let scroll = ctx.input(|i| i.raw_scroll_delta.y);
                 if scroll != 0.0 {
                     if is_3d {
@@ -75,19 +76,74 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                 }
             }
 
+            // ── Blender-style interaction mode handling ───────────────────────
+            if in_mode && response.hovered() {
+                // Initialize mode_start_mouse on first hover
+                if app.mode_start_mouse.is_none() {
+                    if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                        app.mode_start_mouse = Some(pos);
+                    }
+                }
+
+                if let Some(start) = app.mode_start_mouse {
+                    if let Some(current) = ctx.input(|i| i.pointer.hover_pos()) {
+                        let delta_screen = current - start;
+
+                        if let Some(id) = app.selected_obj.clone() {
+                            match app.interaction_mode {
+                                InteractionMode::Grab => {
+                                    apply_grab(app, &id, delta_screen, is_3d);
+                                }
+                                InteractionMode::Scale => {
+                                    apply_scale(app, &id, start, current);
+                                }
+                                InteractionMode::Rotate => {
+                                    apply_rotate(app, &id, start, current, avail);
+                                }
+                                InteractionMode::Normal => {}
+                            }
+                        }
+                    }
+                }
+
+                // Left-click → confirm
+                if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+                    app.confirm_mode();
+                }
+                // Right-click → cancel
+                if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+                    app.cancel_mode();
+                }
+
+                ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                ctx.request_repaint();
+            }
+
             if is_3d {
                 draw_3d(app, &painter, avail, current_t, &response);
             } else {
                 draw_2d(app, &painter, avail, current_t, &response, ctx);
             }
 
+            // ── Interaction mode overlay ──────────────────────────────────────
+            if in_mode {
+                draw_mode_overlay(app, &painter, avail, is_3d);
+            }
+
             // ── Time overlay ──────────────────────────────────────────────────
             let t   = app.scene.timeline.current_time;
             let dur = app.scene.timeline.duration;
-            let hint = if is_3d {
-                "[中: 回転 / Ctrl+中: 移動 / スクロール: ズーム]"
+            let hint = if in_mode {
+                match app.interaction_mode {
+                    InteractionMode::Grab   => "[G: 移動 / X,Y,Z: 軸固定 / LMB,Enter: 確定 / RMB,Esc: キャンセル]",
+                    InteractionMode::Scale  => "[S: 拡縮 / X,Y,Z: 軸固定 / LMB,Enter: 確定 / RMB,Esc: キャンセル]",
+                    InteractionMode::Rotate => "[R: 回転 / LMB,Enter: 確定 / RMB,Esc: キャンセル]",
+                    InteractionMode::Normal => "",
+                }
+            } else if is_3d {
+                "[G: 移動 / S: 拡縮 / R: 回転 / 1,3,7,0: ビュー / 中: 回転 / Ctrl+中: 移動]"
             } else {
-                "[中: pan / スクロール: ズーム]"
+                "[G: 移動 / S: 拡縮 / R: 回転 / 中: pan / スクロール: ズーム]"
             };
             painter.text(
                 avail.left_top() + Vec2::new(8.0, 8.0),
@@ -103,10 +159,11 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
 
             // ── 3D camera info overlay ────────────────────────────────────────
             if is_3d {
+                let view_name = view_preset_name(app.cam3d.phi, app.cam3d.theta);
                 painter.text(
                     avail.right_top() + Vec2::new(-8.0, 8.0),
                     egui::Align2::RIGHT_TOP,
-                    format!("φ={:.0}°  θ={:.0}°  zoom={:.0}", app.cam3d.phi, app.cam3d.theta, app.cam3d.zoom),
+                    format!("{}  φ={:.0}°  θ={:.0}°  zoom={:.0}", view_name, app.cam3d.phi, app.cam3d.theta, app.cam3d.zoom),
                     egui::FontId::monospace(11.0),
                     Color32::from_rgb(120, 200, 255),
                 );
@@ -139,8 +196,8 @@ fn draw_2d(
         draw_obj_2d(painter, obj, &ds, canvas_center, zoom, is_sel);
     }
 
-    // Click to select
-    if response.clicked() {
+    // Click to select (disabled during interaction mode)
+    if response.clicked() && app.interaction_mode == InteractionMode::Normal {
         let click = response.interact_pointer_pos().unwrap_or(avail.center());
         let mut hit = None;
         for obj in app.scene.objects.iter().rev() {
@@ -156,8 +213,11 @@ fn draw_2d(
         app.selected_obj = hit;
     }
 
-    // Left drag → move selected
-    if response.dragged() && !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle)) {
+    // Left drag → move selected (disabled during interaction mode)
+    if app.interaction_mode == InteractionMode::Normal
+        && response.dragged()
+        && !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle))
+    {
         if let Some(id) = app.selected_obj.clone() {
             let delta = response.drag_delta() / zoom;
             if let Some(obj) = app.scene.get_object_mut(&id) {
@@ -221,8 +281,8 @@ fn draw_3d(
         draw_obj_3d(painter, obj, &ds, &proj, is_sel);
     }
 
-    // Click to select (project and find nearest)
-    if response.clicked() {
+    // Click to select (project and find nearest; disabled during interaction mode)
+    if response.clicked() && app.interaction_mode == InteractionMode::Normal {
         let click = response.interact_pointer_pos().unwrap_or(avail.center());
         let mut best: Option<(f32, String)> = None;
         for obj in &objects {
@@ -658,6 +718,211 @@ fn draw_obj_2d(
             egui::FontId::proportional(11.0),
             Color32::from_rgb(255, 220, 50),
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Blender-style interaction helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Apply grab (move) transformation based on mouse delta.
+fn apply_grab(app: &mut ManimStudio, id: &str, delta_screen: Vec2, is_3d: bool) {
+    let zoom = if is_3d { app.cam3d.zoom } else { app.vp_zoom };
+    let origin = app.mode_origin_pos;
+
+    // Convert screen delta to Manim-space delta
+    let (dx, dy, dz);
+    if is_3d {
+        let (right, up) = cam3d_basis(app.cam3d.phi, app.cam3d.theta);
+        // Project screen delta into world space
+        let world_dx = (right[0] * delta_screen.x - up[0] * delta_screen.y) / zoom;
+        let world_dy = (right[1] * delta_screen.x - up[1] * delta_screen.y) / zoom;
+        let world_dz = (right[2] * delta_screen.x - up[2] * delta_screen.y) / zoom;
+        dx = world_dx;
+        dy = world_dy;
+        dz = world_dz;
+    } else {
+        dx = delta_screen.x / zoom;
+        dy = -delta_screen.y / zoom;
+        dz = 0.0;
+    }
+
+    if let Some(obj) = app.scene.get_object_mut(id) {
+        match app.axis_constraint {
+            AxisConstraint::None => {
+                obj.position[0] = origin[0] + dx;
+                obj.position[1] = origin[1] + dy;
+                obj.position[2] = origin[2] + dz;
+            }
+            AxisConstraint::X => {
+                obj.position[0] = origin[0] + dx;
+                obj.position[1] = origin[1];
+                obj.position[2] = origin[2];
+            }
+            AxisConstraint::Y => {
+                obj.position[0] = origin[0];
+                obj.position[1] = origin[1] + dy;
+                obj.position[2] = origin[2];
+            }
+            AxisConstraint::Z => {
+                obj.position[0] = origin[0];
+                obj.position[1] = origin[1];
+                if is_3d {
+                    obj.position[2] = origin[2] + dz;
+                } else {
+                    obj.position[2] = origin[2];
+                }
+            }
+        }
+    }
+}
+
+/// Apply scale transformation based on mouse distance from start point.
+fn apply_scale(app: &mut ManimStudio, id: &str, start: Pos2, current: Pos2) {
+    let dist = (current - start).length();
+    // Scale factor: 1.0 at start, increases with distance (100px = 2x)
+    let factor = 1.0 + dist / 100.0;
+    let origin_scale = app.mode_origin_scale;
+
+    if let Some(obj) = app.scene.get_object_mut(id) {
+        match app.axis_constraint {
+            AxisConstraint::None | AxisConstraint::X | AxisConstraint::Y | AxisConstraint::Z => {
+                // Uniform scale (the object only supports uniform scale)
+                // Direction: moving right/up = scale up, left/down = scale down
+                let sign = if (current.x - start.x) + (start.y - current.y) >= 0.0 { 1.0 } else { -1.0 };
+                let signed_factor = if sign >= 0.0 { factor } else { 1.0 / factor };
+                obj.scale = (origin_scale * signed_factor).clamp(0.01, 50.0);
+            }
+        }
+    }
+}
+
+/// Apply rotation based on angle from start to current relative to the viewport center.
+fn apply_rotate(
+    app: &mut ManimStudio,
+    id: &str,
+    start: Pos2,
+    current: Pos2,
+    avail: Rect,
+) {
+    let center = avail.center();
+    let start_angle = (start.y - center.y).atan2(start.x - center.x);
+    let current_angle = (current.y - center.y).atan2(current.x - center.x);
+    let delta_angle = (current_angle - start_angle).to_degrees();
+
+    if let Some(obj) = app.scene.get_object_mut(id) {
+        obj.rotation = (app.mode_origin_rotation - delta_angle) % 360.0;
+    }
+}
+
+/// Draw the interaction mode overlay (mode indicator, axis guide line).
+fn draw_mode_overlay(app: &ManimStudio, painter: &Painter, avail: Rect, _is_3d: bool) {
+    let mode_label = match app.interaction_mode {
+        InteractionMode::Grab   => "G: Grab (移動)",
+        InteractionMode::Scale  => "S: Scale (拡縮)",
+        InteractionMode::Rotate => "R: Rotate (回転)",
+        InteractionMode::Normal => return,
+    };
+
+    let axis_label = match app.axis_constraint {
+        AxisConstraint::None => "",
+        AxisConstraint::X    => " → X軸",
+        AxisConstraint::Y    => " → Y軸",
+        AxisConstraint::Z    => " → Z軸",
+    };
+
+    let axis_color = match app.axis_constraint {
+        AxisConstraint::None => Color32::from_rgb(255, 200, 50),
+        AxisConstraint::X    => Color32::from_rgb(230, 70, 70),
+        AxisConstraint::Y    => Color32::from_rgb(70, 210, 70),
+        AxisConstraint::Z    => Color32::from_rgb(80, 140, 255),
+    };
+
+    // Mode indicator badge
+    let badge_pos = avail.center_top() + Vec2::new(0.0, 30.0);
+    let text = format!("{}{}", mode_label, axis_label);
+
+    // Background for badge
+    let text_rect = Rect::from_center_size(
+        badge_pos,
+        Vec2::new(text.len() as f32 * 8.0 + 24.0, 28.0),
+    );
+    painter.rect_filled(text_rect, 6.0, Color32::from_rgba_premultiplied(0, 0, 0, 180));
+    painter.rect_stroke(text_rect, 6.0, Stroke::new(1.5, axis_color));
+
+    painter.text(
+        badge_pos,
+        egui::Align2::CENTER_CENTER,
+        &text,
+        egui::FontId::proportional(14.0),
+        axis_color,
+    );
+
+    // Draw axis guide line through the object if axis-constrained
+    if app.axis_constraint != AxisConstraint::None {
+        if let Some(id) = &app.selected_obj {
+            if let Some(obj) = app.scene.get_object(id) {
+                let guide_len = 2000.0;
+                let obj_screen_pos = if app.scene.is_3d {
+                    let proj = Projection3D::new(&app.cam3d, avail.center(), app.cam3d.pan);
+                    proj.project(obj.position)
+                } else {
+                    let canvas_center = avail.center() + app.vp_pan;
+                    m2s(egui::pos2(obj.position[0], obj.position[1]), canvas_center, app.vp_zoom)
+                };
+
+                // Compute axis direction on screen
+                let axis_dir = if app.scene.is_3d {
+                    let proj = Projection3D::new(&app.cam3d, avail.center(), app.cam3d.pan);
+                    let axis_vec = match app.axis_constraint {
+                        AxisConstraint::X => [1.0, 0.0, 0.0],
+                        AxisConstraint::Y => [0.0, 1.0, 0.0],
+                        AxisConstraint::Z => [0.0, 0.0, 1.0],
+                        AxisConstraint::None => return,
+                    };
+                    let p0 = proj.project(obj.position);
+                    let p1 = proj.project([
+                        obj.position[0] + axis_vec[0],
+                        obj.position[1] + axis_vec[1],
+                        obj.position[2] + axis_vec[2],
+                    ]);
+                    (p1 - p0).normalized()
+                } else {
+                    match app.axis_constraint {
+                        AxisConstraint::X => Vec2::new(1.0, 0.0),
+                        AxisConstraint::Y => Vec2::new(0.0, -1.0),
+                        AxisConstraint::Z => Vec2::new(0.0, -1.0),  // Z acts like Y in 2D
+                        AxisConstraint::None => return,
+                    }
+                };
+
+                let p1 = obj_screen_pos - axis_dir * guide_len;
+                let p2 = obj_screen_pos + axis_dir * guide_len;
+                painter.line_segment(
+                    [p1, p2],
+                    Stroke::new(1.5, Color32::from_rgba_premultiplied(
+                        axis_color.r(), axis_color.g(), axis_color.b(), 100,
+                    )),
+                );
+            }
+        }
+    }
+}
+
+/// Return a human-readable name for well-known camera presets.
+fn view_preset_name(phi: f32, theta: f32) -> &'static str {
+    // Use approximate matching (within 2 degrees)
+    let close = |a: f32, b: f32| (a - b).abs() < 2.0;
+    if close(phi, 90.0) && close(theta, 0.0) {
+        "Front"
+    } else if close(phi, 90.0) && close(theta, -90.0) {
+        "Right"
+    } else if close(phi, 1.0) && close(theta, 0.0) {
+        "Top"
+    } else if close(phi, 70.0) && close(theta, -45.0) {
+        "Persp"
+    } else {
+        ""
     }
 }
 
