@@ -76,6 +76,18 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                                     }
                                 }
                             });
+                            ui.menu_button("➕ Add to New Lane", |ui| {
+                                let t = app.scene.timeline.current_time;
+                                let next_lane = crate::scene::max_lane_for_object(&app.scene.animations, id) + 1;
+                                for anim_type in AnimType::all_variants() {
+                                    if ui.button(anim_type.name()).clicked() {
+                                        let mut entry = AnimEntry::new(id, anim_type, t);
+                                        entry.lane = next_lane;
+                                        app.scene.animations.push(entry);
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
                         });
                     }
 
@@ -119,30 +131,29 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                     let templates = object_templates();
                     let mut to_add: Option<crate::scene::ObjType> = None;
 
-                    // Divide into groups
-                    let shapes2d: Vec<_> = templates
-                        .iter()
-                        .filter(|(_, name, _)| {
-                            !matches!(*name, "Sphere" | "Cube" | "Cylinder" | "Axes" | "NumberPlane")
-                                && (filter.is_empty() || name.to_lowercase().contains(&filter))
-                        })
-                        .collect();
-                    let shapes3d: Vec<_> = templates
-                        .iter()
-                        .filter(|(_, name, _)| {
-                            matches!(*name, "Sphere" | "Cube" | "Cylinder")
-                                && (filter.is_empty() || name.to_lowercase().contains(&filter))
-                        })
-                        .collect();
-                    let other: Vec<_> = templates
-                        .iter()
-                        .filter(|(_, name, _)| {
-                            matches!(*name, "Axes" | "NumberPlane")
-                                && (filter.is_empty() || name.to_lowercase().contains(&filter))
-                        })
-                        .collect();
+                    // Category definitions
+                    let categories: &[(&str, &[&str])] = &[
+                        ("2D Shapes", &["Circle", "Square", "Rectangle", "Triangle", "Ellipse",
+                            "Annulus", "Sector", "Arc", "RegularPolygon", "Star",
+                            "RoundedRectangle", "Dot", "Polygon"]),
+                        ("Text", &["Text", "MathTex", "Title", "MarkupText", "BulletedList",
+                            "Paragraph", "Code"]),
+                        ("Lines & Arrows", &["Arrow", "Line", "DashedLine", "DoubleArrow",
+                            "Vector", "CurvedArrow", "CurvedDoubleArrow", "Elbow", "TangentLine"]),
+                        ("Annotations", &["Brace", "BraceLabel", "Angle", "RightAngle",
+                            "LabeledDot", "LabeledLine", "SurroundingRectangle",
+                            "BackgroundRectangle", "Underline", "Cross"]),
+                        ("Graphing", &["Axes", "NumberPlane", "NumberLine", "BarChart",
+                            "FunctionGraph", "ParametricFunction", "ImplicitFunction",
+                            "ComplexPlane", "PolarPlane", "CoordinateSystem"]),
+                        ("Tables & Math", &["Table", "Matrix", "DecimalNumber", "Integer"]),
+                        ("Grouping", &["VGroup"]),
+                        ("3D Objects", &["Sphere", "Cube", "Cylinder", "Dot3D", "Cone", "Torus",
+                            "Prism", "Arrow3D", "Line3D", "Surface", "Icosahedron", "Dodecahedron"]),
+                        ("Special", &["TracedPath", "PointCloudDot"]),
+                    ];
 
-                    let mut render_group = |label: &str, items: Vec<&(&'static str, &'static str, crate::scene::ObjType)>| {
+                    let render_group = |ui: &mut egui::Ui, label: &str, items: Vec<&(&str, &str, crate::scene::ObjType)>, to_add: &mut Option<crate::scene::ObjType>| {
                         if items.is_empty() { return; }
                         ui.label(RichText::new(label).small().color(Color32::from_rgb(100, 120, 160)));
                         ui.horizontal_wrapped(|ui| {
@@ -151,15 +162,22 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                                     .on_hover_text(format!("Add {}", name))
                                     .clicked()
                                 {
-                                    to_add = Some(obj_type.clone());
+                                    *to_add = Some(obj_type.clone());
                                 }
                             }
                         });
                     };
 
-                    render_group("2D Shapes", shapes2d);
-                    render_group("3D Objects", shapes3d);
-                    render_group("Special", other);
+                    for (cat_name, cat_names) in categories {
+                        let items: Vec<_> = templates
+                            .iter()
+                            .filter(|(_, name, _)| {
+                                cat_names.contains(name)
+                                    && (filter.is_empty() || name.to_lowercase().contains(&filter))
+                            })
+                            .collect();
+                        render_group(ui, cat_name, items, &mut to_add);
+                    }
 
                     if let Some(obj_type) = to_add {
                         app.add_object(obj_type);

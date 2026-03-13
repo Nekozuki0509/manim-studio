@@ -62,6 +62,20 @@ pub fn show(app: &mut ManimStudio, ctx: &Context) {
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut app.scene.name);
                     ui.separator();
+                    ui.label("Scene Type:");
+                    egui::ComboBox::from_id_source("scene_type_combo")
+                        .selected_text(app.scene.scene_type.label())
+                        .show_ui(ui, |ui| {
+                            for st in crate::scene::SceneType::all() {
+                                if ui.selectable_label(app.scene.scene_type == *st, st.label()).clicked() {
+                                    app.scene.scene_type = st.clone();
+                                    // Auto-set is_3d flag
+                                    if *st == crate::scene::SceneType::ThreeDScene {
+                                        app.scene.is_3d = true;
+                                    }
+                                }
+                            }
+                        });
                     ui.checkbox(&mut app.scene.is_3d, "3D Scene (ThreeDScene)");
                     ui.separator();
                     ui.checkbox(&mut app.scene.require_latex,

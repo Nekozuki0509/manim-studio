@@ -1429,6 +1429,172 @@ fn draw_obj_2d(
             }
             if selected { painter.rect_stroke(r.expand(3.0), 0.0, sel); }
         }
+        // ── New types: simplified preview renderings ─────────────────────
+        ObjType::CurvedArrow { start, end } | ObjType::CurvedDoubleArrow { start, end } => {
+            let s0 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let e0 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            let mid = Pos2::new((s0.x + e0.x) / 2.0, (s0.y + e0.y) / 2.0 - 20.0 * z);
+            painter.line_segment([s0, mid], stroke);
+            painter.line_segment([mid, e0], stroke);
+            if selected { painter.circle_stroke(Pos2::new((s0.x+e0.x)/2.0, (s0.y+e0.y)/2.0), 6.0, sel); }
+        }
+        ObjType::Elbow => {
+            let half = 1.0 * s * z;
+            painter.line_segment([Pos2::new(pos.x - half, pos.y), Pos2::new(pos.x - half, pos.y - half)], stroke);
+            painter.line_segment([Pos2::new(pos.x - half, pos.y - half), Pos2::new(pos.x, pos.y - half)], stroke);
+            if selected { painter.circle_stroke(pos, half + 3.0, sel); }
+        }
+        ObjType::TangentLine { length, angle } => {
+            let half = length * s * z / 2.0;
+            let rad = angle.to_radians();
+            let dx = half * rad.cos();
+            let dy = half * rad.sin();
+            painter.line_segment(
+                [Pos2::new(pos.x - dx, pos.y + dy), Pos2::new(pos.x + dx, pos.y - dy)],
+                stroke,
+            );
+            if selected { painter.circle_stroke(pos, half + 3.0, sel); }
+        }
+        ObjType::BraceLabel { direction, length, label } => {
+            let half = length * s * z / 2.0;
+            let d = Vec2::new(direction[0], -direction[1]).normalized();
+            let perp = Vec2::new(-d.y, d.x);
+            let s0 = pos + perp * half;
+            let e0 = pos - perp * half;
+            painter.line_segment([s0, e0], stroke);
+            painter.text(pos + d * 10.0, egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(10.0), stroke_col);
+            if selected { painter.circle_stroke(pos, half + 3.0, sel); }
+        }
+        ObjType::LabeledDot { label, radius } => {
+            let r = radius * s * z;
+            painter.circle(pos, r.max(4.0), fill, stroke);
+            painter.text(pos, egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(9.0), stroke_col);
+            if selected { painter.circle_stroke(pos, r.max(4.0) + 3.0, sel); }
+        }
+        ObjType::LabeledLine { label, start, end } => {
+            let s0 = m2s(egui::pos2(start[0], start[1]), center, zoom);
+            let e0 = m2s(egui::pos2(end[0], end[1]), center, zoom);
+            painter.line_segment([s0, e0], stroke);
+            let mid = Pos2::new((s0.x + e0.x) / 2.0, (s0.y + e0.y) / 2.0 - 8.0);
+            painter.text(mid, egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(10.0), stroke_col);
+            if selected { painter.circle_stroke(Pos2::new((s0.x+e0.x)/2.0, (s0.y+e0.y)/2.0), 6.0, sel); }
+        }
+        ObjType::SurroundingRectangle { buff } => {
+            let half = (1.0 + buff) * s * z;
+            let r = Rect::from_center_size(pos, Vec2::splat(half * 2.0));
+            painter.rect_stroke(r, 2.0, stroke);
+            if selected { painter.rect_stroke(r.expand(3.0), 2.0, sel); }
+        }
+        ObjType::BackgroundRectangle => {
+            let half = 1.0 * s * z;
+            let r = Rect::from_center_size(pos, Vec2::splat(half * 2.0));
+            painter.rect(r, 0.0, Color32::from_rgba_premultiplied(0, 0, 0, 120), Stroke::NONE);
+            if selected { painter.rect_stroke(r.expand(3.0), 0.0, sel); }
+        }
+        ObjType::Underline => {
+            let half = 1.5 * s * z;
+            painter.line_segment([Pos2::new(pos.x - half, pos.y + 2.0), Pos2::new(pos.x + half, pos.y + 2.0)], stroke);
+            if selected { painter.circle_stroke(pos, half + 3.0, sel); }
+        }
+        ObjType::Cross { scale } => {
+            let half = scale * s * z;
+            painter.line_segment([Pos2::new(pos.x - half, pos.y - half), Pos2::new(pos.x + half, pos.y + half)], stroke);
+            painter.line_segment([Pos2::new(pos.x - half, pos.y + half), Pos2::new(pos.x + half, pos.y - half)], stroke);
+            if selected { painter.circle_stroke(pos, half + 3.0, sel); }
+        }
+        ObjType::FunctionGraph { .. } | ObjType::ParametricFunction { .. }
+        | ObjType::ImplicitFunction { .. } => {
+            // Draw a wavy line as placeholder
+            let half = 2.0 * s * z;
+            let points: Vec<Pos2> = (0..20).map(|i| {
+                let t = i as f32 / 19.0;
+                Pos2::new(pos.x - half + t * half * 2.0, pos.y + (t * 6.28).sin() * half * 0.3)
+            }).collect();
+            for w in points.windows(2) {
+                painter.line_segment([w[0], w[1]], stroke);
+            }
+            if selected { painter.rect_stroke(Rect::from_center_size(pos, Vec2::splat(half * 2.0 + 6.0)), 0.0, sel); }
+        }
+        ObjType::ComplexPlane | ObjType::PolarPlane | ObjType::CoordinateSystem => {
+            // Draw axes cross
+            let half = 3.0 * s * z;
+            painter.line_segment([Pos2::new(pos.x - half, pos.y), Pos2::new(pos.x + half, pos.y)], stroke);
+            painter.line_segment([Pos2::new(pos.x, pos.y - half), Pos2::new(pos.x, pos.y + half)], stroke);
+            if selected { painter.rect_stroke(Rect::from_center_size(pos, Vec2::splat(half * 2.0 + 6.0)), 0.0, sel); }
+        }
+        ObjType::Title { content } => {
+            let fid = egui::FontId::proportional(20.0 * s * z);
+            painter.text(pos, egui::Align2::CENTER_CENTER, content, fid, stroke_col);
+            if selected { painter.circle_stroke(pos, 20.0, sel); }
+        }
+        ObjType::MarkupText { content } | ObjType::Paragraph { content } => {
+            let fid = egui::FontId::proportional(12.0 * s * z);
+            painter.text(pos, egui::Align2::CENTER_CENTER, content, fid, stroke_col);
+            if selected { painter.circle_stroke(pos, 15.0, sel); }
+        }
+        ObjType::Code { code, .. } => {
+            let fid = egui::FontId::monospace(10.0 * s * z);
+            let first_line = code.lines().next().unwrap_or("code");
+            painter.text(pos, egui::Align2::CENTER_CENTER, first_line, fid, stroke_col);
+            if selected { painter.circle_stroke(pos, 15.0, sel); }
+        }
+        ObjType::BulletedList { items } => {
+            let fid = egui::FontId::proportional(10.0 * s * z);
+            for (i, item) in items.iter().take(5).enumerate() {
+                let y_off = i as f32 * 14.0 * s * z;
+                let label = format!("• {}", item);
+                painter.text(Pos2::new(pos.x, pos.y + y_off), egui::Align2::CENTER_CENTER, &label, fid.clone(), stroke_col);
+            }
+            if selected { painter.circle_stroke(pos, 20.0, sel); }
+        }
+        ObjType::Table { rows, cols } => {
+            let cw = 20.0 * s * z; let rh = 14.0 * s * z;
+            let total_w = *cols as f32 * cw; let total_h = *rows as f32 * rh;
+            let r = Rect::from_center_size(pos, Vec2::new(total_w, total_h));
+            painter.rect_stroke(r, 0.0, stroke);
+            for i in 1..*cols { let x = r.left() + i as f32 * cw; painter.line_segment([Pos2::new(x, r.top()), Pos2::new(x, r.bottom())], stroke); }
+            for i in 1..*rows { let y = r.top() + i as f32 * rh; painter.line_segment([Pos2::new(r.left(), y), Pos2::new(r.right(), y)], stroke); }
+            if selected { painter.rect_stroke(r.expand(3.0), 0.0, sel); }
+        }
+        ObjType::Matrix { rows, cols } => {
+            let cw = 18.0 * s * z; let rh = 14.0 * s * z;
+            let total_w = *cols as f32 * cw; let total_h = *rows as f32 * rh;
+            let r = Rect::from_center_size(pos, Vec2::new(total_w, total_h));
+            // Draw brackets
+            let bw = 4.0 * s * z;
+            painter.line_segment([Pos2::new(r.left()-bw, r.top()), Pos2::new(r.left(), r.top())], stroke);
+            painter.line_segment([Pos2::new(r.left()-bw, r.top()), Pos2::new(r.left()-bw, r.bottom())], stroke);
+            painter.line_segment([Pos2::new(r.left()-bw, r.bottom()), Pos2::new(r.left(), r.bottom())], stroke);
+            painter.line_segment([Pos2::new(r.right()+bw, r.top()), Pos2::new(r.right(), r.top())], stroke);
+            painter.line_segment([Pos2::new(r.right()+bw, r.top()), Pos2::new(r.right()+bw, r.bottom())], stroke);
+            painter.line_segment([Pos2::new(r.right()+bw, r.bottom()), Pos2::new(r.right(), r.bottom())], stroke);
+            if selected { painter.rect_stroke(r.expand(bw + 3.0), 0.0, sel); }
+        }
+        ObjType::VGroup { .. } => {
+            // Draw grouped circle indicator
+            painter.circle_stroke(pos, 8.0 * s * z, stroke);
+            painter.circle_stroke(pos + Vec2::new(4.0, -4.0) * s * z, 8.0 * s * z, Stroke::new(stroke.width * 0.5, stroke_col));
+            if selected { painter.circle_stroke(pos, 16.0 * s * z, sel); }
+        }
+        ObjType::Icosahedron { radius } | ObjType::Dodecahedron { radius } => {
+            let r = radius * s * z;
+            // Approximation: draw hexagon
+            let n = if matches!(&obj.object_type, ObjType::Icosahedron { .. }) { 6 } else { 5 };
+            let pts: Vec<Pos2> = (0..=n).map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / n as f32;
+                Pos2::new(pos.x + r * a.cos(), pos.y + r * a.sin())
+            }).collect();
+            for w in pts.windows(2) { painter.line_segment([w[0], w[1]], stroke); }
+            if selected { painter.circle_stroke(pos, r + 3.0, sel); }
+        }
+        ObjType::TracedPath | ObjType::PointCloudDot => {
+            // Dotted line placeholder
+            for i in 0..5_i32 {
+                let off = (i as f32 - 2.0) * 6.0 * s * z;
+                painter.circle(Pos2::new(pos.x + off, pos.y), 2.0 * s * z, fill, Stroke::NONE);
+            }
+            if selected { painter.circle_stroke(pos, 15.0 * s * z, sel); }
+        }
     }
 
     if selected {
