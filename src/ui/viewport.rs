@@ -917,6 +917,40 @@ fn draw_text_on_plane(
     }
 }
 
+/// Render text in 2D with rotation around its center.
+/// When `angle` is 0 the text is horizontal. Non-zero angles rotate around
+/// the text center so the text direction matches the object's rotation.
+fn draw_text_2d_rotated(
+    painter: &Painter,
+    center: Pos2,
+    content: &str,
+    font_size: f32,
+    angle: f32,
+    color: Color32,
+) {
+    if font_size < 0.5 { return; }
+    // Clamp rendered font size for readability; we still position correctly
+    let fs = font_size.clamp(4.0, 200.0);
+    let galley = painter.layout_no_wrap(
+        content.to_string(),
+        egui::FontId::proportional(fs),
+        color,
+    );
+    let gw = galley.size().x;
+    let gh = galley.size().y;
+
+    let shape = egui::Shape::Text(egui::epaint::TextShape {
+        pos: egui::pos2(center.x - gw / 2.0, center.y - gh / 2.0),
+        galley,
+        underline: Stroke::NONE,
+        fallback_color: color,
+        override_text_color: Some(color),
+        opacity_factor: 1.0,
+        angle,
+    });
+    painter.add(shape);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2D object drawing (unchanged from before)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -972,22 +1006,23 @@ fn draw_obj_2d(
             if selected { painter.add(egui::Shape::convex_polygon(pts, Color32::TRANSPARENT, sel)); }
         }
         ObjType::Text { content, font_size } => {
-            let fs = (font_size * s * z / FONT_SIZE_SCALE * 18.0).clamp(8.0, 72.0);
-            painter.text(pos, egui::Align2::CENTER_CENTER, content,
-                egui::FontId::proportional(fs), stroke_col);
+            // Scale text size proportionally with zoom (no tight upper clamp)
+            let fs = (font_size * s * z / FONT_SIZE_SCALE * 18.0).max(1.0);
+            let angle = ds.rotation.to_radians();
+            draw_text_2d_rotated(painter, pos, content, fs, angle, stroke_col);
             if selected {
                 let tr = Rect::from_center_size(pos,
-                    Vec2::new(fs * content.len() as f32 * 0.55, fs * 1.3));
+                    Vec2::new(fs * content.chars().count() as f32 * 0.55, fs * 1.3));
                 painter.rect_stroke(tr.expand(4.0), 3.0, sel);
             }
         }
         ObjType::MathTex { content } => {
-            let fs = (18.0 * s * z / 60.0).clamp(8.0, 48.0);
-            painter.text(pos, egui::Align2::CENTER_CENTER, content,
-                egui::FontId::monospace(fs), stroke_col);
+            let fs = (18.0 * s * z / 60.0).max(1.0);
+            let angle = ds.rotation.to_radians();
+            draw_text_2d_rotated(painter, pos, content, fs, angle, stroke_col);
             if selected {
                 let tr = Rect::from_center_size(pos,
-                    Vec2::new(fs * content.len() as f32 * 0.65, fs * 1.3));
+                    Vec2::new(fs * content.chars().count() as f32 * 0.65, fs * 1.3));
                 painter.rect_stroke(tr.expand(4.0), 3.0, sel);
             }
         }
@@ -1324,9 +1359,9 @@ fn draw_obj_2d(
         }
         ObjType::DecimalNumber { number, num_decimal_places } => {
             let text = format!("{:.1$}", number, *num_decimal_places as usize);
-            let fs = (18.0 * s * z / 60.0 * 14.0).clamp(8.0, 48.0);
-            painter.text(pos, egui::Align2::CENTER_CENTER, &text,
-                egui::FontId::monospace(fs), stroke_col);
+            let fs = (18.0 * s * z / 60.0 * 14.0).max(1.0);
+            let angle = ds.rotation.to_radians();
+            draw_text_2d_rotated(painter, pos, &text, fs, angle, stroke_col);
             if selected {
                 let tr = Rect::from_center_size(pos, Vec2::new(fs * text.len() as f32 * 0.6, fs * 1.3));
                 painter.rect_stroke(tr.expand(4.0), 3.0, sel);
@@ -1334,9 +1369,9 @@ fn draw_obj_2d(
         }
         ObjType::Integer { number } => {
             let text = format!("{}", number);
-            let fs = (18.0 * s * z / 60.0 * 14.0).clamp(8.0, 48.0);
-            painter.text(pos, egui::Align2::CENTER_CENTER, &text,
-                egui::FontId::monospace(fs), stroke_col);
+            let fs = (18.0 * s * z / 60.0 * 14.0).max(1.0);
+            let angle = ds.rotation.to_radians();
+            draw_text_2d_rotated(painter, pos, &text, fs, angle, stroke_col);
             if selected {
                 let tr = Rect::from_center_size(pos, Vec2::new(fs * text.len() as f32 * 0.6, fs * 1.3));
                 painter.rect_stroke(tr.expand(4.0), 3.0, sel);
@@ -1523,19 +1558,22 @@ fn draw_obj_2d(
             if selected { painter.rect_stroke(Rect::from_center_size(pos, Vec2::splat(half * 2.0 + 6.0)), 0.0, sel); }
         }
         ObjType::Title { content } => {
-            let fid = egui::FontId::proportional(20.0 * s * z);
-            painter.text(pos, egui::Align2::CENTER_CENTER, content, fid, stroke_col);
+            let fs = (20.0 * s * z).max(1.0);
+            let angle = ds.rotation.to_radians();
+            draw_text_2d_rotated(painter, pos, content, fs, angle, stroke_col);
             if selected { painter.circle_stroke(pos, 20.0, sel); }
         }
         ObjType::MarkupText { content } | ObjType::Paragraph { content } => {
-            let fid = egui::FontId::proportional(12.0 * s * z);
-            painter.text(pos, egui::Align2::CENTER_CENTER, content, fid, stroke_col);
+            let fs = (12.0 * s * z).max(1.0);
+            let angle = ds.rotation.to_radians();
+            draw_text_2d_rotated(painter, pos, content, fs, angle, stroke_col);
             if selected { painter.circle_stroke(pos, 15.0, sel); }
         }
         ObjType::Code { code, .. } => {
-            let fid = egui::FontId::monospace(10.0 * s * z);
+            let fs = (10.0 * s * z).max(1.0);
             let first_line = code.lines().next().unwrap_or("code");
-            painter.text(pos, egui::Align2::CENTER_CENTER, first_line, fid, stroke_col);
+            let angle = ds.rotation.to_radians();
+            draw_text_2d_rotated(painter, pos, first_line, fs, angle, stroke_col);
             if selected { painter.circle_stroke(pos, 15.0, sel); }
         }
         ObjType::BulletedList { items } => {

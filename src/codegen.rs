@@ -29,7 +29,8 @@ pub fn generate(scene: &Scene) -> String {
     }
 
     // ── 3D Camera ───────────────────────────────────────────────────────────
-    if scene.is_3d {
+    // set_camera_orientation is only available on ThreeDScene
+    if scene.is_3d && base_class == "ThreeDScene" {
         lines.push(format!(
             "        self.set_camera_orientation(phi={}*DEGREES, theta={}*DEGREES)",
             scene.camera_phi, scene.camera_theta

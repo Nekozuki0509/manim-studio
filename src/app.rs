@@ -532,10 +532,12 @@ impl eframe::App for ManimStudio {
         }
 
         // ── Layout ───────────────────────────────────────────────────────────
+        // Side panels must render before bottom panel so the timeline fits
+        // between them and does not overlap the properties panel.
         crate::ui::toolbar::show(self, ctx);
-        crate::ui::timeline::show(self, ctx);
         crate::ui::objects_panel::show(self, ctx);
         crate::ui::properties::show(self, ctx);
+        crate::ui::timeline::show(self, ctx);
         crate::ui::viewport::show(self, ctx);
 
         // ── Floating windows ─────────────────────────────────────────────────
