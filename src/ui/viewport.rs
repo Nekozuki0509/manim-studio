@@ -725,6 +725,11 @@ fn draw_obj_2d(
 // Blender-style interaction helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Pixels of mouse movement for a 2× scale change.
+const SCALE_SENSITIVITY: f32 = 100.0;
+/// Length (in screen pixels) of the axis constraint guide line.
+const AXIS_GUIDE_LENGTH: f32 = 2000.0;
+
 /// Apply grab (move) transformation based on mouse delta.
 fn apply_grab(app: &mut ManimStudio, id: &str, delta_screen: Vec2, is_3d: bool) {
     let zoom = if is_3d { app.cam3d.zoom } else { app.vp_zoom };
@@ -780,17 +785,16 @@ fn apply_grab(app: &mut ManimStudio, id: &str, delta_screen: Vec2, is_3d: bool) 
 /// Apply scale transformation based on mouse distance from start point.
 fn apply_scale(app: &mut ManimStudio, id: &str, start: Pos2, current: Pos2) {
     let dist = (current - start).length();
-    // Scale factor: 1.0 at start, increases with distance (100px = 2x)
-    let factor = 1.0 + dist / 100.0;
+    let factor = 1.0 + dist / SCALE_SENSITIVITY;
     let origin_scale = app.mode_origin_scale;
 
     if let Some(obj) = app.scene.get_object_mut(id) {
         match app.axis_constraint {
             AxisConstraint::None | AxisConstraint::X | AxisConstraint::Y | AxisConstraint::Z => {
-                // Uniform scale (the object only supports uniform scale)
-                // Direction: moving right/up = scale up, left/down = scale down
-                let sign = if (current.x - start.x) + (start.y - current.y) >= 0.0 { 1.0 } else { -1.0 };
-                let signed_factor = if sign >= 0.0 { factor } else { 1.0 / factor };
+                // Uniform scale (the object only supports uniform scale).
+                // Moving right/up from the start point scales up; left/down scales down.
+                let diagonal = (current.x - start.x) + (start.y - current.y);
+                let signed_factor = if diagonal >= 0.0 { factor } else { 1.0 / factor };
                 obj.scale = (origin_scale * signed_factor).clamp(0.01, 50.0);
             }
         }
@@ -862,7 +866,7 @@ fn draw_mode_overlay(app: &ManimStudio, painter: &Painter, avail: Rect, _is_3d: 
     if app.axis_constraint != AxisConstraint::None {
         if let Some(id) = &app.selected_obj {
             if let Some(obj) = app.scene.get_object(id) {
-                let guide_len = 2000.0;
+                let guide_len = AXIS_GUIDE_LENGTH;
                 let obj_screen_pos = if app.scene.is_3d {
                     let proj = Projection3D::new(&app.cam3d, avail.center(), app.cam3d.pan);
                     proj.project(obj.position)

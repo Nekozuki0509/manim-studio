@@ -356,8 +356,9 @@ impl ManimStudio {
 
     /// Cancel the current transformation and restore original values.
     pub fn cancel_mode(&mut self) {
-        if let Some(id) = &self.selected_obj.clone() {
-            if let Some(obj) = self.scene.get_object_mut(id) {
+        if let Some(id) = &self.selected_obj {
+            let id = id.clone();
+            if let Some(obj) = self.scene.get_object_mut(&id) {
                 obj.position = self.mode_origin_pos;
                 obj.scale = self.mode_origin_scale;
                 obj.rotation = self.mode_origin_rotation;
@@ -366,7 +367,8 @@ impl ManimStudio {
         self.interaction_mode = InteractionMode::Normal;
         self.axis_constraint = AxisConstraint::None;
         self.mode_start_mouse = None;
-        // Pop the undo snapshot we pushed when entering the mode
+        // Manually revert the undo snapshot pushed by enter_mode(), without
+        // clearing the selection (which self.undo() would do).
         if self.history_cursor > 0 {
             self.history_cursor -= 1;
             self.history.truncate(self.history_cursor);
